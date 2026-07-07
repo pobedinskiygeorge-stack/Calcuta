@@ -29,8 +29,9 @@
   --var:#c79bf0;           /* variables (purple) — top priority */
   --super:#6fb2f0;         /* supertask // (blue) */
   --date:#e3b755;          /* dates dd.mm (yellow) */
-  --num:#d9d4c8;           /* numbers */
-  --op:#8c8778;            /* operators / keywords */
+  --num:#5cc0e8;           /* numbers in a computation (blue) */
+  --op-work:#79cd93;       /* working arithmetic signs (green) */
+  --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
   --result:#8fc7a8;        /* right-column results */
   --checked-bg:rgba(101,158,120,.15);
   --checked-text:#79856f;
@@ -44,7 +45,7 @@
   --lh:24px;
   --pad-y:14px;
   --pad-x:16px;
-  --gutter-w:52px;
+  --gutter-w:30px;
   --results-w:150px;
 }
 
@@ -116,6 +117,63 @@ button{font-family:inherit;color:inherit}
 .tag-chip .del:hover{color:var(--accent)}
 .empty-hint{font-size:12px;color:var(--dim);line-height:1.5}
 
+/* search box */
+.search-box{
+  display:flex;align-items:center;gap:8px;margin:0 14px 4px;padding:7px 10px;
+  background:var(--bg-editor);border:1px solid var(--border);border-radius:9px;
+}
+.search-box:focus-within{border-color:var(--accent)}
+.search-box .search-ic{color:var(--dim);flex:0 0 auto}
+.search-box input{
+  flex:1 1 auto;min-width:0;background:none;border:0;outline:none;color:var(--text);font-size:13px;
+}
+.search-box input::placeholder{color:var(--dim)}
+.search-count{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* documents */
+.doc-list{display:flex;flex-direction:column;gap:3px;margin-bottom:9px}
+.doc-item{
+  display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;cursor:pointer;
+  border:1px solid transparent;
+}
+.doc-item:hover{background:var(--bg-editor)}
+.doc-item.active{background:var(--bg-editor);border-color:var(--border)}
+.doc-item.active .doc-name{color:var(--text-strong)}
+.doc-item .doc-name{
+  flex:1 1 auto;min-width:0;font-size:13px;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.doc-item .doc-badge{
+  flex:0 0 auto;font-size:10.5px;background:var(--date);color:#22200f;border-radius:9px;
+  padding:0 6px;line-height:16px;font-variant-numeric:tabular-nums;display:none;
+}
+.doc-item.match .doc-badge{display:inline-block}
+.doc-item.dim{opacity:.4}
+.doc-item .doc-del{
+  flex:0 0 auto;border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;
+  padding:0 2px;opacity:0;transition:opacity .12s;
+}
+.doc-item:hover .doc-del{opacity:1}
+.doc-item .doc-del:hover{color:var(--accent)}
+.doc-add{
+  width:100%;text-align:left;background:none;border:1px dashed var(--border);border-radius:7px;
+  padding:7px 9px;color:var(--dim);cursor:pointer;font-size:12.5px;
+}
+.doc-add:hover{border-color:var(--accent);color:var(--accent)}
+
+/* editable document title */
+.title-input{
+  background:none;border:1px solid transparent;border-radius:7px;outline:none;
+  color:var(--text);font-family:var(--font-mono);font-size:13px;padding:4px 8px;
+  max-width:340px;min-width:80px;
+}
+.title-input:hover{border-color:var(--border-soft)}
+.title-input:focus{border-color:var(--accent);background:var(--bg-editor);color:var(--text-strong)}
+
+/* search navigation (topbar) */
+.search-nav{display:none;align-items:center;gap:2px}
+.search-nav.on{display:inline-flex}
+
 /* cheatsheet */
 .cheat{display:flex;flex-direction:column;gap:8px}
 .cheat .row{display:flex;gap:10px;align-items:baseline;font-size:12px}
@@ -154,13 +212,12 @@ button{font-family:inherit;color:inherit}
   user-select:none;position:relative;z-index:2;
 }
 .gutter-line{
-  height:var(--lh);line-height:var(--lh);padding-right:12px;color:var(--dim);
-  font-size:12px;cursor:pointer;position:relative;white-space:nowrap;
+  height:var(--lh);line-height:var(--lh);padding-right:6px;color:var(--dim);
+  font-size:11px;cursor:pointer;position:relative;white-space:nowrap;
 }
 .gutter-line:hover{color:var(--text)}
 .gutter-line.selected{background:var(--accent-soft)}
-.gutter-line.src::after{content:"";position:absolute;right:4px;top:50%;transform:translateY(-50%);
-  width:4px;height:4px;border-radius:50%;background:var(--accent)}
+.gutter-line.src{color:var(--accent);font-weight:700}
 
 /* stack: layered highlight / textarea / hotspots. Height driven by in-flow #highlight. */
 #stack{flex:1 1 auto;position:relative;min-width:0;overflow:hidden}
@@ -180,6 +237,7 @@ button{font-family:inherit;color:inherit}
 .hl-line.checked{background:var(--checked-bg)}
 #highlight .num{color:var(--num)}
 #highlight .op{color:var(--op)}
+#highlight .opx{color:var(--op-work);font-weight:600}
 #highlight .date{color:var(--date);font-weight:500}
 #highlight .super{color:var(--super)}
 #highlight .header{color:var(--dim);font-weight:600}
@@ -189,7 +247,7 @@ button{font-family:inherit;color:inherit}
 #highlight .checkmark{color:var(--result);font-weight:600}
 #highlight .cbox{color:var(--dim)}
 .hl-line.checked{color:var(--checked-text)}
-.hl-line.checked .num,.hl-line.checked .var,.hl-line.checked .op,
+.hl-line.checked .num,.hl-line.checked .var,.hl-line.checked .op,.hl-line.checked .opx,
 .hl-line.checked .date,.hl-line.checked .tag,.hl-line.checked .sub{
   color:var(--checked-text)!important;font-weight:400}
 .hl-line.checked .checkmark{color:var(--result)!important}
@@ -200,6 +258,11 @@ button{font-family:inherit;color:inherit}
   outline:none;white-space:pre;
 }
 #input::selection{background:var(--sel)}
+
+/* search highlight layer (yellow behind text) */
+#searchlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
+.search-mark{position:absolute;height:var(--lh);background:rgba(227,183,85,.30);border-radius:3px}
+.search-mark.active{background:rgba(227,183,85,.62);box-shadow:0 0 0 1px rgba(227,183,85,.85)}
 
 #hotspots{position:absolute;top:0;left:0;width:100%;height:100%;z-index:4;pointer-events:none}
 .cbox-hit{
@@ -213,13 +276,18 @@ button{font-family:inherit;color:inherit}
   border-left:1px solid var(--border-soft);user-select:none;
 }
 .result-line{
-  height:var(--lh);line-height:var(--lh);padding:0 14px;text-align:right;
-  color:var(--result);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  cursor:default;position:relative;
+  height:var(--lh);line-height:var(--lh);padding:0 12px;display:flex;justify-content:flex-end;
+  align-items:center;position:relative;
 }
-.result-line.has:hover{background:var(--accent-soft);cursor:pointer}
-.result-line.copied{color:#fff}
-.result-line .eq{color:var(--dim-2);margin-right:4px}
+.result-line .pill{
+  max-width:100%;box-sizing:border-box;
+  border:1px solid var(--border);border-radius:999px;padding:0 10px;height:19px;line-height:18px;
+  background:var(--bg-panel);color:var(--result);font-size:12.5px;
+  font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  cursor:pointer;transition:border-color .12s,background .12s,color .12s;
+}
+.result-line.has:hover .pill{border-color:var(--result);background:rgba(143,199,168,.16);color:#fff}
+.result-line.copied .pill{border-color:var(--result);background:var(--result);color:#12140f}
 
 /* context menu (line-number colors) */
 #ctxmenu{
@@ -232,6 +300,20 @@ button{font-family:inherit;color:inherit}
 .sw{width:22px;height:22px;border-radius:6px;cursor:pointer;border:1px solid rgba(255,255,255,.12)}
 .sw:hover{transform:scale(1.12)}
 .sw.clear{display:grid;place-items:center;background:var(--bg-editor);color:var(--dim);font-size:13px}
+
+/* line context menu (delete completed) */
+#linemenu{
+  position:fixed;z-index:50;background:var(--bg-panel);border:1px solid var(--border);
+  border-radius:10px;padding:5px;box-shadow:0 12px 34px rgba(0,0,0,.5);display:none;min-width:160px;
+}
+#linemenu.open{display:block}
+.lm-item{
+  display:block;width:100%;text-align:left;background:none;border:0;border-radius:7px;
+  padding:8px 10px;font-size:13px;color:var(--text);cursor:pointer;
+}
+.lm-item:hover{background:var(--bg-editor)}
+.lm-item.danger:hover{background:rgba(201,80,66,.16);color:#f0917a}
+.hl-line.swiping{opacity:.4;transition:opacity .12s}
 
 /* toast */
 #toast{
@@ -255,7 +337,17 @@ button{font-family:inherit;color:inherit}
       <div class="logo">∑</div>
       <div class="name">Calcuta<small>текст + математика</small></div>
     </div>
+    <div class="search-box">
+      <svg class="search-ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M10 4a6 6 0 014.47 10l4.26 4.26-1.42 1.42L13.04 15.4A6 6 0 1110 4zm0 2a4 4 0 100 8 4 4 0 000-8z"/></svg>
+      <input id="search" type="text" placeholder="поиск по документам…" autocomplete="off" spellcheck="false">
+      <span class="search-count" id="search-count"></span>
+    </div>
     <div class="side-scroll">
+      <div class="side-section">
+        <h3 class="side-title">Документы</h3>
+        <div class="doc-list" id="doc-list"></div>
+        <button class="doc-add" id="doc-add">+ Новый документ</button>
+      </div>
       <div class="side-section">
         <h3 class="side-title">Тэги</h3>
         <div class="tag-form">
@@ -284,13 +376,19 @@ button{font-family:inherit;color:inherit}
   <div id="workspace">
     <div class="topbar">
       <button class="icon-btn" id="toggle-sidebar" title="меню">☰</button>
-      <span class="title">черновик</span>
+      <input id="doc-title" class="title-input" placeholder="Без названия" maxlength="60"
+             autocomplete="off" spellcheck="false">
       <span class="spacer"></span>
+      <span class="search-nav" id="search-nav">
+        <button class="icon-btn" id="search-prev" title="предыдущее (Shift+Enter)">↑</button>
+        <button class="icon-btn" id="search-next" title="следующее (Enter)">↓</button>
+      </span>
       <span class="status" id="status"></span>
     </div>
     <div id="editor">
       <div id="gutter"></div>
       <div id="stack">
+        <div id="searchlayer"></div>
         <pre id="highlight" class="layer" aria-hidden="true"></pre>
         <textarea id="input" class="layer" spellcheck="false" autocomplete="off"
                   autocapitalize="off" wrap="off"></textarea>
@@ -304,6 +402,9 @@ button{font-family:inherit;color:inherit}
 <div id="ctxmenu">
   <p class="ctx-title">Цвет номеров строк</p>
   <div class="swatches" id="ctx-swatches"></div>
+</div>
+<div id="linemenu">
+  <button class="lm-item danger" data-act="delete">Удалить строку</button>
 </div>
 <div id="toast"></div>
 
@@ -485,7 +586,7 @@ function evaluate(toks, scope, ctx){
     if(tk.t==='agg'){ next();
       const w=tk.v;
       if(w==='prev'||w==='previous') return val(ctx.prev==null?0:ctx.prev);
-      const arr=ctx.section;
+      const arr=ctx.contig;             // only the contiguous run directly above
       if(w==='avg'||w==='average'||w==='mean') return val(arr.length? arr.reduce((s,x)=>s+x,0)/arr.length : 0);
       return val(arr.reduce((s,x)=>s+x,0)); // sum/total/subtotal
     }
@@ -536,17 +637,20 @@ function analyze(text){
   const lines=text.split('\n');
   const vars=collectVars(lines);
   const scope={};
-  const ctx={section:[], prev:null};
+  // `contig` = results of the unbroken run of lines directly above; a blank
+  // line or a heading (// or #) breaks the run so `sum` only adds a column.
+  const ctx={contig:[], prev:null};
   const varDefLine={};                       // name -> first defining line index
   const out=[];
 
   lines.forEach((line, idx)=>{
     const cls=classify(line);
     const content=line.slice(cls.markerLen);
+    const isBlank=line.trim()==='';
     let result=null, assignedName=null;
 
-    // section boundary
-    if(cls.kind==='super'||cls.kind==='header'){ ctx.section=[]; ctx.prev=null; }
+    // run boundary: blank line or heading resets the contiguous block
+    if(isBlank || cls.kind==='super' || cls.kind==='header'){ ctx.contig=[]; }
 
     // assignment?
     const am=ASSIGN_RE.exec(line);
@@ -566,9 +670,9 @@ function analyze(text){
       result=evaluate(toks, scope, ctx);
     }
 
-    // feed section aggregation (skip boundary lines)
+    // feed aggregation (skip boundary/heading lines)
     if(result!==null && cls.kind!=='super' && cls.kind!=='header'){
-      ctx.section.push(result);
+      ctx.contig.push(result);
       ctx.prev=result;
     }
 
@@ -588,6 +692,7 @@ function esc(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt
 function buildLineHTML(item, vars, varDefLine, tags){
   const {raw, cls} = item;
   const len=raw.length;
+  const hasResult = item.result!==null;   // this line takes part in a computation
   // char-class array; higher priority overrides
   const P={base:0, num:1, date:2, op:3, tag:4, varr:5};
   const cclass=new Array(len).fill('');   // css class per char
@@ -612,7 +717,7 @@ function buildLineHTML(item, vars, varDefLine, tags){
 
   const scanText=raw;
 
-  // ---- numbers (skip dates) ----
+  // ---- numbers (blue, only when the line computes) & dates (always) ----
   if(cls.kind!=='super'&&cls.kind!=='header'){
     let i=bodyStart;
     while(i<len){
@@ -620,15 +725,20 @@ function buildLineHTML(item, vars, varDefLine, tags){
       if(dm && isDateMatch(dm[1],dm[2])){ paint(i,i+dm[0].length,'date',P.date,{type:'date'}); i+=dm[0].length; continue; }
       const nm=scanText.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
       if(nm && /\d/.test(nm[0]) && !/[\p{L}_]/u.test(scanText[i-1]||' ')){
-        paint(i,i+nm[0].length,'num',P.num,{type:'num'}); i+=nm[0].length; continue;
+        if(hasResult) paint(i,i+nm[0].length,'num',P.num,{type:'num'});
+        i+=nm[0].length; continue;
       }
       i++;
     }
-    // ---- operators ----
-    for(let k=bodyStart;k<len;k++){
-      if('+-*/^()%='.includes(scanText[k]) && prio[k]<P.op) paint(k,k+1,'op',P.op,{type:'op'});
+    // ---- operators: working arithmetic signs green (only when computing);
+    //      grouping/assignment ( ) = stay muted ----
+    if(hasResult){
+      for(let k=bodyStart;k<len;k++){
+        const ch=scanText[k];
+        if('+-*/^%'.includes(ch) && prio[k]<P.op) paint(k,k+1,'opx',P.op,{type:'op'});
+        else if('()='.includes(ch) && prio[k]<P.op) paint(k,k+1,'op',P.op,{type:'op'});
+      }
     }
-    // ---- dates already painted above ----
   }
 
   // ---- tags (custom colors) ----
@@ -657,12 +767,15 @@ function buildLineHTML(item, vars, varDefLine, tags){
   }
 
   // ---- checkbox marker: render the LITERAL "[ ]"/"[x]" so column widths
-  //      stay identical to the textarea (perfect monospace alignment). ----
+  //      stay identical to the textarea. The bracket may be preceded by
+  //      hierarchy indent, so anchor it at cls.indent, not at 0. ----
   let markerHTML='';
   if(cls.kind==='checkbox'){
+    const ind=cls.indent||0;
     const brCls = cls.checked ? 'checkmark' : 'cbox';
-    markerHTML = '<span class="'+brCls+'">'+esc(raw.slice(0,3))+'</span>'
-               + '<span class="cbox">'+esc(raw.slice(3,markerLen))+'</span>';
+    markerHTML = esc(raw.slice(0,ind))
+               + '<span class="'+brCls+'">'+esc(raw.slice(ind,ind+3))+'</span>'
+               + '<span class="cbox">'+esc(raw.slice(ind+3,markerLen))+'</span>';
   }
 
   // Build body spans, grouping consecutive same class+color.
@@ -697,14 +810,15 @@ const $=id=>document.getElementById(id);
 const input=$('input'), highlight=$('highlight'),
       gutter=$('gutter'), results=$('results'), hotspots=$('hotspots'),
       stack=$('stack'), editor=$('editor'), ctxmenu=$('ctxmenu'),
-      toast=$('toast'), statusEl=$('status');
+      linemenu=$('linemenu'), toast=$('toast'), statusEl=$('status'),
+      searchlayer=$('searchlayer');
 
-const STORE_KEY='calcuta.v1';
-let state={
-  text:'',
-  tags:[],                 // {label,color}
-  lineColors:{},           // lineIndex -> color
-};
+const STORE_KEY='calcuta.v2';
+/* Multi-document store. Tags are shared across documents; text, name and
+   line-number colors live per document. */
+let store={ docs:[], activeId:null, tags:[] };
+function doc(){ return store.docs.find(d=>d.id===store.activeId) || store.docs[0]; }
+function uid(){ return 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 let model=null;            // last analyze() + per-line meta
 let selectedGutter=new Set();
 let charW=8.4;             // measured monospace char width
@@ -780,7 +894,7 @@ function render(){
   // gutter
   let g='';
   for(let k=0;k<n;k++){
-    const col=state.lineColors[k];
+    const col=doc().lineColors[k];
     const sel=selectedGutter.has(k)?' selected':'';
     g+='<div class="gutter-line'+sel+'" data-i="'+k+'"'+(col?' style="color:'+col+'"':'')+'>'+(k+1)+'</div>';
   }
@@ -789,7 +903,7 @@ function render(){
   // highlight + hotspots + results
   let hl='', hs='', rs='';
   for(let k=0;k<n;k++){
-    const built=buildLineHTML(A.lines[k], A.vars, A.varDefLine, state.tags);
+    const built=buildLineHTML(A.lines[k], A.vars, A.varDefLine, store.tags);
     model.meta[k]=built.cmeta;
     hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'">'+built.html+'</div>';
 
@@ -801,7 +915,7 @@ function render(){
     }
     if(it.result!==null){
       rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'">'
-        +'<span class="eq">=</span>'+esc(fmt(it.result))+'</div>';
+        +'<span class="pill">'+esc(fmt(it.result))+'</span></div>';
     }else{
       rs+='<div class="result-line" data-i="'+k+'"></div>';
     }
@@ -815,41 +929,216 @@ function render(){
   statusEl.textContent=n+' стр · '+words+' сл';
 
   syncScroll();
+  if(searchQuery){ computeMatches(); renderSearch(); }
 }
 
 /* ---------- persistence ---------- */
+function persist(){
+  const d=doc(); if(d){ d.text=input.value; d.updated=Date.now(); }
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
+}
 let saveTimer=null;
 function scheduleSave(){
   clearTimeout(saveTimer);
-  saveTimer=setTimeout(()=>{
-    state.text=input.value;
-    try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }catch(e){}
-  },300);
+  saveTimer=setTimeout(persist,300);
 }
+
 function load(){
   let s=null;
   try{ s=JSON.parse(localStorage.getItem(STORE_KEY)||'null'); }catch(e){}
-  if(s){ state=Object.assign(state, s); }
-  input.value = state.text || DEFAULT_DOC;
-  applyMask();
+  if(s && Array.isArray(s.docs)){
+    store=s;
+  }else{
+    // migrate from v1 single-document format, or start fresh
+    let old=null; try{ old=JSON.parse(localStorage.getItem('calcuta.v1')||'null'); }catch(e){}
+    const d={ id:uid(), name:'Черновик',
+              text:(old&&old.text)||DEFAULT_DOC,
+              lineColors:(old&&old.lineColors)||{} };
+    store={ docs:[d], activeId:d.id, tags:(old&&old.tags)||[] };
+  }
+  if(!store.docs.length){ store.docs.push({id:uid(),name:'Черновик',text:DEFAULT_DOC,lineColors:{}}); }
+  store.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; if(!d.id) d.id=uid(); });
+  if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
+  if(!store.tags) store.tags=[];
+
+  loadActiveIntoEditor();
   renderTags();
+  renderDocs();
+  persist();
+}
+
+/* Load the active document's text into the editor. */
+function loadActiveIntoEditor(){
+  const d=doc();
+  input.value=d.text||'';
+  selectedGutter.clear();
+  autoIndent();
+  applyMask();
   render();
+  updateTitle();
+}
+
+/* ---------- document management ---------- */
+function switchDoc(id){
+  if(id===store.activeId) return;
+  persist();                 // save current doc's text first
+  store.activeId=id;
+  loadActiveIntoEditor();
+  renderDocs();
+  persist();
+}
+function createDoc(){
+  persist();
+  const n=store.docs.length+1;
+  const d={ id:uid(), name:'Документ '+n, text:'', lineColors:{} };
+  store.docs.push(d);
+  store.activeId=d.id;
+  loadActiveIntoEditor();
+  renderDocs();
+  persist();
+  const ti=$('doc-title'); if(ti){ ti.focus(); ti.select(); }
+}
+function deleteDoc(id){
+  const idx=store.docs.findIndex(d=>d.id===id);
+  if(idx<0) return;
+  if(store.docs.length===1){    // never leave zero docs — reset the last one
+    store.docs[0].text=''; store.docs[0].lineColors={}; store.docs[0].name='Черновик';
+    loadActiveIntoEditor(); renderDocs(); persist(); return;
+  }
+  const wasActive=(store.activeId===id);
+  store.docs.splice(idx,1);
+  if(wasActive){ store.activeId=store.docs[Math.max(0,idx-1)].id; loadActiveIntoEditor(); }
+  renderDocs();
+  persist();
+}
+function renameDoc(name){
+  const d=doc(); if(!d) return;
+  d.name=name;
+  const row=$('doc-list').querySelector('.doc-item.active .doc-name');
+  if(row) row.textContent=name||'Без названия';
+  scheduleSave();
+}
+function updateTitle(){
+  const ti=$('doc-title'); const d=doc();
+  if(ti && d) ti.value=d.name||'';
+}
+function renderDocs(){
+  const list=$('doc-list');
+  const q=searchQuery.toLowerCase();
+  list.innerHTML=store.docs.map(d=>{
+    const active=d.id===store.activeId?' active':'';
+    let cls=active, badge='';
+    if(q){
+      const cnt=countMatches((d.id===store.activeId?input.value:(d.text||'')), q);
+      if(cnt>0){ cls+=' match'; badge='<span class="doc-badge">'+cnt+'</span>'; }
+      else cls+=' dim';
+    }
+    return '<div class="doc-item'+cls+'" data-id="'+d.id+'">'
+      +'<span class="doc-name">'+esc(d.name||'Без названия')+'</span>'+badge
+      +'<button class="doc-del" data-id="'+d.id+'" title="удалить документ">×</button></div>';
+  }).join('');
+}
+
+/* ================================================================
+   [SEARCH] — highlight matches in the active doc (yellow), count them,
+   navigate with arrows, and show per-document match counts.
+   ================================================================ */
+let searchQuery='';
+let searchMatches=[];   // [{line,col,len}] in the active document
+let searchIdx=-1;
+
+function countMatches(text, qLower){
+  if(!qLower) return 0;
+  let n=0,i=0; const hay=text.toLowerCase();
+  while((i=hay.indexOf(qLower,i))!==-1){ n++; i+=qLower.length; }
+  return n;
+}
+
+function computeMatches(){
+  searchMatches=[];
+  const q=searchQuery;
+  if(!q){ searchIdx=-1; return; }
+  const ql=q.toLowerCase();
+  const lines=input.value.split('\n');
+  lines.forEach((line,li)=>{
+    const hay=line.toLowerCase();
+    let c=0;
+    while((c=hay.indexOf(ql,c))!==-1){ searchMatches.push({line:li,col:c,len:q.length}); c+=q.length; }
+  });
+  if(searchMatches.length===0) searchIdx=-1;
+  else if(searchIdx<0||searchIdx>=searchMatches.length) searchIdx=0;
+}
+
+function renderSearch(){
+  // marks
+  if(!searchQuery){ searchlayer.innerHTML=''; }
+  else{
+    let html='';
+    searchMatches.forEach((m,k)=>{
+      const top=m.line*24+14;                 // li*lh + padY
+      const left=m.col*charW+16;              // col*charW + padX
+      const w=m.len*charW;
+      html+='<div class="search-mark'+(k===searchIdx?' active':'')+'" '
+        +'style="top:'+top+'px;left:'+left+'px;width:'+w+'px"></div>';
+    });
+    searchlayer.innerHTML=html;
+    syncScroll();
+  }
+  // counter
+  const cnt=$('search-count');
+  if(!searchQuery){ cnt.textContent=''; }
+  else if(searchMatches.length===0){ cnt.textContent='0'; }
+  else { cnt.textContent=(searchIdx+1)+'/'+searchMatches.length; }
+  // nav buttons visibility
+  $('search-nav').classList.toggle('on', !!searchQuery && searchMatches.length>0);
+}
+
+function onSearchInput(){
+  searchQuery=$('search').value;
+  searchIdx=searchQuery?0:-1;
+  computeMatches();
+  renderSearch();
+  renderDocs();
+  if(searchMatches.length) scrollToMatch();
+}
+
+function navigateSearch(dir){
+  if(!searchMatches.length) return;
+  searchIdx=(searchIdx+dir+searchMatches.length)%searchMatches.length;
+  renderSearch();
+  scrollToMatch();
+}
+
+function scrollToMatch(){
+  const m=searchMatches[searchIdx]; if(!m) return;
+  const top=m.line*24+14;
+  const view=editor.clientHeight;
+  if(top<editor.scrollTop+40 || top>editor.scrollTop+view-40){
+    editor.scrollTop=Math.max(0, top-view/2);
+  }
+  // reveal horizontally by nudging the textarea's scroll
+  const left=m.col*charW+16;
+  if(left<input.scrollLeft+40 || left>input.scrollLeft+stack.clientWidth-40){
+    input.scrollLeft=Math.max(0,left-stack.clientWidth/2);
+    syncScroll();
+  }
 }
 
 const DEFAULT_DOC=
-`// Проект: ремонт кухни
+`// Ремонт кухни
 [ ] купить плитку
 [ ] заказать столешницу
 [x] замерить стены
 
-бюджет = 500k
+// Бюджет
 плитка = 1200 * 8
 столешница = 45000
+доставка = 3500
 sum
 
-срок 12.05
-скидка = бюджет - 10%
-итого = бюджет + столешница + плитка`;
+итого = плитка + столешница + доставка
+скидка = итого - 10%
+срок 12.05`;
 
 /* ---------- checkbox transform (++ -> [ ]) & toggle ---------- */
 function transformDoubleplus(){
@@ -881,21 +1170,86 @@ function toggleCheckbox(i){
   onChange();
 }
 
+/* ---------- hierarchy auto-indent (subtasks under "//" get an indent) ---------- */
+const INDENT_UNIT='   ';   // 3 spaces of real indentation (managed by the app)
+function autoIndent(){
+  const val=input.value, caret=input.selectionStart;
+  const lines=val.split('\n');
+
+  // locate caret as (row, column-from-line-start)
+  let acc=0, caretRow=lines.length-1, caretCol=0;
+  for(let r=0;r<lines.length;r++){
+    if(caret<=acc+lines[r].length){ caretRow=r; caretCol=caret-acc; break; }
+    acc+=lines[r].length+1;
+  }
+
+  let underHeading=false, changed=false;
+  const oldIndent=[], newIndent=[];
+  const newLines=lines.map(line=>{
+    const oi=(line.match(/^[ \t]*/)[0]).length;
+    const body=line.slice(oi);
+    const isHeading=/^\/\//.test(body)||/^#/.test(body);
+    let indent='';
+    if(isHeading){ underHeading=true; }
+    else if(body==='') { /* blank line: no indent chars, group continues */ }
+    else if(underHeading){ indent=INDENT_UNIT; }
+    oldIndent.push(oi); newIndent.push(indent.length);
+    if(indent.length!==oi) changed=true;
+    return indent+body;
+  });
+  if(!changed) return;
+
+  const newText=newLines.join('\n');
+  const contentCol=Math.max(caretCol-oldIndent[caretRow],0);
+  let off=0; for(let r=0;r<caretRow;r++) off+=newLines[r].length+1;
+  const nc=off+newIndent[caretRow]+contentCol;
+  input.value=newText;
+  input.setSelectionRange(nc,nc);
+}
+
 /* ---------- main change handler ---------- */
 let composing=false;
 function onInput(){
   if(composing) return;
   transformDoubleplus();
+  autoIndent();
   applyMask();
   onChange();
 }
 function onChange(){ render(); scheduleSave(); }
 
+/* Replace the whole document, keeping mask + caret consistent. */
+function commitValue(newText, caret){
+  input.value=newText;
+  const c=Math.max(0,Math.min(caret==null?newText.length:caret,newText.length));
+  input.setSelectionRange(c,c);
+  applyMask();
+  onChange();
+}
+
+/* ---------- delete a line (right-click menu / swipe) ---------- */
+function deleteLine(i){
+  const lines=input.value.split('\n');
+  if(i<0||i>=lines.length) return;
+  const before=lines.slice(0,i).join('\n');
+  lines.splice(i,1);
+  const newText=lines.join('\n');
+  // shift stored line-number colors down past the removed line
+  const lc=doc().lineColors, shifted={};
+  Object.keys(lc).forEach(k=>{
+    k=+k; if(k<i) shifted[k]=lc[k]; else if(k>i) shifted[k-1]=lc[k];
+  });
+  doc().lineColors=shifted;
+  selectedGutter.clear();
+  const caret=Math.min(before.length, newText.length);
+  commitValue(newText, i===0?0:caret);
+}
+
 /* ---------- tags UI ---------- */
 function renderTags(){
   const list=$('tag-list');
-  if(!state.tags.length){ list.innerHTML='<p class="empty-hint">Добавь тэг — его текст будет подсвечен выбранным цветом (приоритет ниже переменных).</p>'; return; }
-  list.innerHTML=state.tags.map((t,idx)=>
+  if(!store.tags.length){ list.innerHTML='<p class="empty-hint">Добавь тэг — его текст будет подсвечен выбранным цветом (приоритет ниже переменных).</p>'; return; }
+  list.innerHTML=store.tags.map((t,idx)=>
     '<div class="tag-chip"><span class="dot" style="background:'+t.color+'"></span>'+
     '<span class="label">'+esc(t.label)+'</span>'+
     '<button class="del" data-i="'+idx+'" title="удалить">×</button></div>').join('');
@@ -904,7 +1258,7 @@ function addTag(){
   const name=$('tag-name').value.trim();
   const color=$('tag-color').value;
   if(!name) return;
-  if(!state.tags.some(t=>t.label.toLowerCase()===name.toLowerCase())) state.tags.push({label:name,color});
+  if(!store.tags.some(t=>t.label.toLowerCase()===name.toLowerCase())) store.tags.push({label:name,color});
   $('tag-name').value='';
   renderTags(); render(); scheduleSave();
 }
@@ -923,6 +1277,26 @@ function openCtxMenu(x,y){
   ctxmenu.classList.add('open');
 }
 function closeCtxMenu(){ ctxmenu.classList.remove('open'); }
+
+/* ---------- line context menu (delete completed items) ---------- */
+let lineMenuTarget=-1;
+function openLineMenu(x,y,i){
+  lineMenuTarget=i;
+  linemenu.style.left=Math.min(x, window.innerWidth-176)+'px';
+  linemenu.style.top=Math.min(y, window.innerHeight-70)+'px';
+  linemenu.classList.add('open');
+}
+function closeLineMenu(){ linemenu.classList.remove('open'); lineMenuTarget=-1; }
+function onStackCtx(e){
+  const {row}=hitTest(e.clientX,e.clientY);
+  const lines=model?model.data.lines:[];
+  // custom menu only over checkbox (task) lines — keep native menu elsewhere
+  if(row>=0 && row<lines.length && lines[row].cls.kind==='checkbox'){
+    e.preventDefault();
+    closeCtxMenu();
+    openLineMenu(e.clientX,e.clientY,row);
+  }
+}
 
 /* ---------- hover: row lighten + source-line highlight ---------- */
 let hoverRow=-1, srcRow=-1;
@@ -960,10 +1334,51 @@ function onStackMove(e){
 }
 function onStackLeave(){ hoverRow=-1; srcRow=-1; setRowFx(); }
 
+/* Highlight the source line when hovering a result pill. */
+function onResultHover(e){
+  const el=e.target.closest('.result-line.has');
+  hoverRow=-1; srcRow=el?+el.dataset.i:-1; setRowFx();
+}
+function onResultLeave(){ srcRow=-1; setRowFx(); }
+
+/* ---------- swipe-to-delete (touch) ---------- */
+let swipe=null;
+function onTouchStart(e){
+  if(e.touches.length!==1) return;
+  const t=e.touches[0]; const {row}=hitTest(t.clientX,t.clientY);
+  const lines=model?model.data.lines:[];
+  if(row<0||row>=lines.length) { swipe=null; return; }
+  swipe={x:t.clientX,y:t.clientY,row,active:false};
+}
+function onTouchMove(e){
+  if(!swipe) return;
+  const t=e.touches[0]; const dx=t.clientX-swipe.x, dy=t.clientY-swipe.y;
+  if(!swipe.active && Math.abs(dx)>14 && Math.abs(dx)>Math.abs(dy)*1.4){ swipe.active=true; }
+  if(swipe.active){
+    e.preventDefault();
+    const el=highlight.children[swipe.row];
+    if(el){ el.style.transform='translateX('+dx+'px)'; el.style.opacity=String(Math.max(.2,1-Math.abs(dx)/220)); }
+  }
+}
+function onTouchEnd(e){
+  if(!swipe){ return; }
+  const el=highlight.children[swipe.row];
+  const t=(e.changedTouches&&e.changedTouches[0]); const dx=t?t.clientX-swipe.x:0;
+  if(swipe.active && Math.abs(dx)>70){
+    const row=swipe.row; swipe=null;
+    if(el) el.classList.add('swiping');
+    deleteLine(row);
+  }else{
+    if(el){ el.style.transform=''; el.style.opacity=''; }
+    swipe=null;
+  }
+}
+
 /* Mirror the textarea's horizontal auto-scroll (long lines) onto the overlay
    layers so highlighted text and checkbox hotspots stay pixel-aligned. */
 function syncScroll(){
   const x='translateX('+(-input.scrollLeft)+'px)';
+  searchlayer.style.transform=x;
   highlight.style.transform=x;
   hotspots.style.transform=x;
 }
@@ -1047,8 +1462,9 @@ function onGutterCtx(e){
   openCtxMenu(e.clientX,e.clientY);
 }
 function applyLineColor(color){
+  const lc=doc().lineColors;
   selectedGutter.forEach(i=>{
-    if(color) state.lineColors[i]=color; else delete state.lineColors[i];
+    if(color) lc[i]=color; else delete lc[i];
   });
   closeCtxMenu(); render(); refreshGutterSel(); scheduleSave();
 }
@@ -1097,6 +1513,10 @@ function boot(){
 
   stack.addEventListener('mousemove', onStackMove);
   stack.addEventListener('mouseleave', onStackLeave);
+  stack.addEventListener('contextmenu', onStackCtx);
+  stack.addEventListener('touchstart', onTouchStart, {passive:true});
+  stack.addEventListener('touchmove', onTouchMove, {passive:false});
+  stack.addEventListener('touchend', onTouchEnd);
 
   hotspots.addEventListener('click', e=>{
     const hit=e.target.closest('.cbox-hit'); if(hit){ toggleCheckbox(+hit.dataset.i); }
@@ -1106,21 +1526,58 @@ function boot(){
   gutter.addEventListener('contextmenu', onGutterCtx);
 
   results.addEventListener('click', onResultsClick);
+  results.addEventListener('mouseover', onResultHover);
+  results.addEventListener('mouseleave', onResultLeave);
 
   $('ctx-swatches').addEventListener('click', e=>{
     const sw=e.target.closest('.sw'); if(!sw) return; applyLineColor(sw.dataset.c);
   });
-  document.addEventListener('click', e=>{ if(!ctxmenu.contains(e.target)) closeCtxMenu(); });
-  document.addEventListener('contextmenu', e=>{ if(!e.target.closest('#gutter')&&!ctxmenu.contains(e.target)) closeCtxMenu(); });
+  linemenu.addEventListener('click', e=>{
+    const it=e.target.closest('.lm-item'); if(!it) return;
+    if(it.dataset.act==='delete' && lineMenuTarget>=0) deleteLine(lineMenuTarget);
+    closeLineMenu();
+  });
+  document.addEventListener('click', e=>{
+    if(!ctxmenu.contains(e.target)) closeCtxMenu();
+    if(!linemenu.contains(e.target)) closeLineMenu();
+  });
+  document.addEventListener('contextmenu', e=>{
+    if(!e.target.closest('#gutter')&&!ctxmenu.contains(e.target)) closeCtxMenu();
+    if(!e.target.closest('#stack')&&!linemenu.contains(e.target)) closeLineMenu();
+  });
 
   $('tag-add').addEventListener('click', addTag);
   $('tag-name').addEventListener('keydown', e=>{ if(e.key==='Enter') addTag(); });
   $('tag-list').addEventListener('click', e=>{
     const del=e.target.closest('.del'); if(!del) return;
-    state.tags.splice(+del.dataset.i,1); renderTags(); render(); scheduleSave();
+    store.tags.splice(+del.dataset.i,1); renderTags(); render(); scheduleSave();
   });
 
   $('toggle-sidebar').addEventListener('click', ()=>$('sidebar').classList.toggle('collapsed'));
+
+  // documents
+  $('doc-add').addEventListener('click', createDoc);
+  $('doc-list').addEventListener('click', e=>{
+    const del=e.target.closest('.doc-del');
+    if(del){ e.stopPropagation(); deleteDoc(del.dataset.id); return; }
+    const item=e.target.closest('.doc-item'); if(item) switchDoc(item.dataset.id);
+  });
+  // editable title
+  const ti=$('doc-title');
+  ti.addEventListener('input', ()=>renameDoc(ti.value));
+  ti.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); ti.blur(); input.focus(); } });
+
+  // search
+  const sb=$('search');
+  sb.addEventListener('input', onSearchInput);
+  sb.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.preventDefault(); navigateSearch(e.shiftKey?-1:1); }
+    else if(e.key==='ArrowDown'){ e.preventDefault(); navigateSearch(1); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); navigateSearch(-1); }
+    else if(e.key==='Escape'){ sb.value=''; onSearchInput(); }
+  });
+  $('search-next').addEventListener('click', ()=>{ navigateSearch(1); $('search').focus(); });
+  $('search-prev').addEventListener('click', ()=>{ navigateSearch(-1); $('search').focus(); });
 
   window.addEventListener('resize', ()=>{ measureChar(); render(); });
 
