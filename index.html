@@ -27,10 +27,10 @@
   --accent:#c96442;        /* Claude clay */
   --accent-soft:rgba(201,100,66,.16);
   --var:#c79bf0;           /* variables (purple) — top priority */
-  --super:#6fb2f0;         /* supertask // (blue) */
+  --super:#b98cf5;         /* supertask // (purple) */
   --date:#e3b755;          /* dates dd.mm (yellow) */
-  --num:#5cc0e8;           /* numbers in a computation (blue) */
-  --op-work:#79cd93;       /* working arithmetic signs (green) */
+  --num:#7ec8f5;           /* numbers in a computation (sky blue) */
+  --op-work:#e8a24e;       /* working arithmetic signs (orange) */
   --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
   --result:#8fc7a8;        /* right-column results */
   --checked-bg:rgba(101,158,120,.15);
@@ -63,12 +63,12 @@ button{font-family:inherit;color:inherit}
 
 /* ---------- Sidebar ---------- */
 #sidebar{
-  flex:0 0 250px;background:var(--bg-panel);
-  border-right:1px solid var(--border);
-  display:flex;flex-direction:column;min-height:0;
+  flex:0 0 250px;width:250px;min-width:0;max-width:250px;
+  background:var(--bg-panel);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;min-height:0;overflow:hidden;
   transition:margin-left .18s ease;
 }
-#sidebar.collapsed{margin-left:-250px}
+#sidebar.collapsed{margin-left:-251px}   /* fully off-screen (incl. border) */
 .brand{
   display:flex;align-items:center;gap:9px;
   padding:16px 18px 14px;border-bottom:1px solid var(--border-soft);
@@ -149,6 +149,7 @@ button{font-family:inherit;color:inherit}
 }
 .doc-item.match .doc-badge{display:inline-block}
 .doc-item.dim{opacity:.4}
+.doc-item .doc-pin{flex:0 0 auto;font-size:10px;opacity:.65;filter:grayscale(.2)}
 .doc-item .doc-del{
   flex:0 0 auto;border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;
   padding:0 2px;opacity:0;transition:opacity .12s;
@@ -198,9 +199,11 @@ button{font-family:inherit;color:inherit}
 .topbar .spacer{flex:1 1 auto}
 .topbar .status{font-size:12px;color:var(--dim-2);font-family:var(--font-mono)}
 
-/* editor grid */
+/* editor grid — single vertical scroller; children grow to content height so
+   the textarea and the highlight overlay scroll together (no caret desync) */
 #editor{
-  flex:1 1 auto;display:flex;min-height:0;overflow-y:auto;overflow-x:hidden;
+  flex:1 1 auto;display:flex;align-items:flex-start;min-height:0;
+  overflow-y:auto;overflow-x:hidden;
   font-family:var(--font-mono);font-size:var(--fs);line-height:var(--lh);
 }
 #editor::-webkit-scrollbar{width:11px}
@@ -209,7 +212,7 @@ button{font-family:inherit;color:inherit}
 /* gutter (line numbers) — thin dim column, selectable, colorable */
 #gutter{
   flex:0 0 var(--gutter-w);padding:var(--pad-y) 0;text-align:right;
-  user-select:none;position:relative;z-index:2;
+  user-select:none;position:relative;z-index:2;min-height:100%;
 }
 .gutter-line{
   height:var(--lh);line-height:var(--lh);padding-right:6px;color:var(--dim);
@@ -219,8 +222,9 @@ button{font-family:inherit;color:inherit}
 .gutter-line.selected{background:var(--accent-soft)}
 .gutter-line.src{color:var(--accent);font-weight:700}
 
-/* stack: layered highlight / textarea / hotspots. Height driven by in-flow #highlight. */
-#stack{flex:1 1 auto;position:relative;min-width:0;overflow:hidden}
+/* stack: layered highlight / textarea / hotspots. Height driven by in-flow
+   #highlight; min-height fills the viewport for short documents. */
+#stack{flex:1 1 auto;position:relative;min-width:0;overflow:hidden;min-height:100%}
 
 .layer{
   margin:0;padding:var(--pad-y) var(--pad-x);
@@ -273,7 +277,7 @@ button{font-family:inherit;color:inherit}
 /* results column */
 #results{
   flex:0 0 var(--results-w);padding:var(--pad-y) 0;position:relative;z-index:2;
-  border-left:1px solid var(--border-soft);user-select:none;
+  border-left:1px solid var(--border-soft);user-select:none;min-height:100%;
 }
 .result-line{
   height:var(--lh);line-height:var(--lh);padding:0 12px;display:flex;justify-content:flex-end;
@@ -282,12 +286,12 @@ button{font-family:inherit;color:inherit}
 .result-line .pill{
   max-width:100%;box-sizing:border-box;
   border:1px solid var(--border);border-radius:999px;padding:0 10px;height:19px;line-height:18px;
-  background:var(--bg-panel);color:var(--result);font-size:12.5px;
+  background:var(--bg-panel);color:var(--text-strong);font-size:12.5px;
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   cursor:pointer;transition:border-color .12s,background .12s,color .12s;
 }
-.result-line.has:hover .pill{border-color:var(--result);background:rgba(143,199,168,.16);color:#fff}
-.result-line.copied .pill{border-color:var(--result);background:var(--result);color:#12140f}
+.result-line.has:hover .pill{border-color:var(--accent);background:var(--accent-soft);color:#fff}
+.result-line.copied .pill{border-color:var(--accent);background:var(--accent);color:#fff}
 
 /* context menu (line-number colors) */
 #ctxmenu{
@@ -314,6 +318,26 @@ button{font-family:inherit;color:inherit}
 .lm-item:hover{background:var(--bg-editor)}
 .lm-item.danger:hover{background:rgba(201,80,66,.16);color:#f0917a}
 .hl-line.swiping{opacity:.4;transition:opacity .12s}
+
+/* confirmation modal */
+#confirm-overlay{
+  position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.5);
+  display:none;align-items:center;justify-content:center;
+}
+#confirm-overlay.open{display:flex}
+#confirm-box{
+  background:var(--bg-panel);border:1px solid var(--border);border-radius:14px;
+  padding:20px;max-width:340px;width:calc(100% - 40px);box-shadow:0 20px 60px rgba(0,0,0,.55);
+}
+#confirm-msg{margin:0 0 18px;font-size:14px;color:var(--text);line-height:1.5}
+.confirm-actions{display:flex;justify-content:flex-end;gap:9px}
+.confirm-actions button{
+  border:1px solid var(--border);background:var(--bg-editor);color:var(--text);
+  border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer;
+}
+.confirm-actions button:hover{border-color:var(--dim)}
+.confirm-actions button.danger{background:var(--accent);border-color:var(--accent);color:#fff}
+.confirm-actions button.danger:hover{filter:brightness(1.08)}
 
 /* toast */
 #toast{
@@ -364,9 +388,9 @@ button{font-family:inherit;color:inherit}
         <div class="cheat">
           <div class="row"><code>2*8 + 10%</code><span class="desc">живой расчёт справа</span></div>
           <div class="row"><code>x = 500k</code><span class="desc">переменная (фиолетовый)</span></div>
-          <div class="row"><code>sum</code><span class="desc">сумма секции · prev · avg</span></div>
+          <div class="row"><code>sum · сумм</code><span class="desc">сумма блока · prev · avg</span></div>
           <div class="row"><code>++</code><span class="desc">строка → чекбокс</span></div>
-          <div class="row"><code>//</code><span class="desc">надзадача (голубой)</span></div>
+          <div class="row"><code>//</code><span class="desc">надзадача (фиолетовый)</span></div>
           <div class="row"><code>12.05</code><span class="desc">дата (жёлтый)</span></div>
         </div>
       </div>
@@ -405,6 +429,15 @@ button{font-family:inherit;color:inherit}
 </div>
 <div id="linemenu">
   <button class="lm-item danger" data-act="delete">Удалить строку</button>
+</div>
+<div id="confirm-overlay">
+  <div id="confirm-box" role="dialog" aria-modal="true">
+    <p id="confirm-msg"></p>
+    <div class="confirm-actions">
+      <button id="confirm-cancel">Отмена</button>
+      <button id="confirm-ok" class="danger">Удалить</button>
+    </div>
+  </div>
 </div>
 <div id="toast"></div>
 
@@ -454,23 +487,32 @@ function parseNum(raw){
   return isFinite(v) ? v*mult : NaN;
 }
 
-/* ---- Date detection: dd.mm with a dot (comma stays decimal) ---- */
-const DATE_RE = /\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b/;
+/* ---- Date detection: dd.mm with a 2-digit month. The 2-digit-month rule
+   keeps dot-decimals ("3.14", "1234.56", "12.5") from being mistaken for
+   dates — only a genuine "dd.mm" (e.g. "12.05") stays a date. ---- */
+const DATE_SRC = '(\\d{1,2})\\.(\\d{2})(?:\\.(\\d{2,4}))?(?!\\d)';
+const DATE_RE = new RegExp('\\b'+DATE_SRC);
 function isDateMatch(d,m){ d=+d;m=+m; return d>=1&&d<=31&&m>=1&&m<=12; }
+function dateAt(s){ const m=s.match(new RegExp('^'+DATE_SRC)); return (m && isDateMatch(m[1],m[2]))?m:null; }
 
 /* ---- Number token regex.
    Alt 1: space/NBSP-grouped thousands ("2 500 000", "1 234,5").
    Alt 2: plain / NBSP-run / suffixed ("2500000", "500k", "12,5").
    Regular space (U+0020) and NBSP (U+202F) both act as group separators. ---- */
-const SEP_RE = /[  ]/g;
-const NUM_RE = /\d{1,3}(?:[  ]\d{3})+(?:,\d+)?|\d[\d ]*(?:,\d+)?(?:[kKM])?/;
+const NUM_RE = /\d{1,3}(?:[ \u202f]\d{3})+(?:[.,]\d+)?|\d[\d\u202f]*(?:[.,]\d+)?(?:[kKM])?/;
 
 /* ================================================================
    Tokenizer for math evaluation.
    Produces a flat token list; unknown words are dropped ("context").
    `vars` is a Set of known variable names (lower-cased).
    ================================================================ */
-const KEYWORDS = new Set(['sum','total','subtotal','prev','previous','avg','average','mean']);
+// Aggregation keywords (English + Russian aliases). NB: "итог/итого" are
+// intentionally NOT keywords — they are commonly used as variable names.
+const KEYWORDS = new Set([
+  'sum','total','subtotal','сумм','сумма','сумму',
+  'prev','previous','пред','предыдущее','предыдущий',
+  'avg','average','mean','сред','среднее','средн'
+]);
 
 function tokenizeMath(text, vars){
   const toks = [];
@@ -481,8 +523,8 @@ function tokenizeMath(text, vars){
     const c = text[i];
     if(c===' '||c==='\t'){ i++; continue; }
     // date -> skip (treated as context for math)
-    const dm = text.slice(i).match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b/);
-    if(dm && isDateMatch(dm[1],dm[2])){ i+=dm[0].length; continue; }
+    const dm = dateAt(text.slice(i));
+    if(dm){ i+=dm[0].length; continue; }
     // number
     const nm = text.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
     if(nm && /\d/.test(nm[0])){ toks.push({t:'num',v:parseNum(nm[0])}); i+=nm[0].length; continue; }
@@ -585,10 +627,12 @@ function evaluate(toks, scope, ctx){
       const v=scope[key]; if(v===undefined||v===null||isNaN(v)) throw 0; return val(v); }
     if(tk.t==='agg'){ next();
       const w=tk.v;
-      if(w==='prev'||w==='previous') return val(ctx.prev==null?0:ctx.prev);
+      if(w==='prev'||w==='previous'||w==='пред'||w==='предыдущее'||w==='предыдущий')
+        return val(ctx.prev==null?0:ctx.prev);
       const arr=ctx.contig;             // only the contiguous run directly above
-      if(w==='avg'||w==='average'||w==='mean') return val(arr.length? arr.reduce((s,x)=>s+x,0)/arr.length : 0);
-      return val(arr.reduce((s,x)=>s+x,0)); // sum/total/subtotal
+      if(w==='avg'||w==='average'||w==='mean'||w==='сред'||w==='среднее'||w==='средн')
+        return val(arr.length? arr.reduce((s,x)=>s+x,0)/arr.length : 0);
+      return val(arr.reduce((s,x)=>s+x,0)); // sum/total/subtotal + сумм/сумма
     }
     throw 0;
   }
@@ -721,8 +765,8 @@ function buildLineHTML(item, vars, varDefLine, tags){
   if(cls.kind!=='super'&&cls.kind!=='header'){
     let i=bodyStart;
     while(i<len){
-      const dm=scanText.slice(i).match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b/);
-      if(dm && isDateMatch(dm[1],dm[2])){ paint(i,i+dm[0].length,'date',P.date,{type:'date'}); i+=dm[0].length; continue; }
+      const dm=dateAt(scanText.slice(i));
+      if(dm){ paint(i,i+dm[0].length,'date',P.date,{type:'date'}); i+=dm[0].length; continue; }
       const nm=scanText.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
       if(nm && /\d/.test(nm[0]) && !/[\p{L}_]/u.test(scanText[i-1]||' ')){
         if(hasResult) paint(i,i+nm[0].length,'num',P.num,{type:'num'});
@@ -839,30 +883,35 @@ function measureChar(){
 /* Masking matcher: a digit run that may already carry NBSP grouping (but NOT
    regular spaces). Only NBSP is added/removed by masking, which keeps the
    caret-preservation math valid (it counts non-NBSP characters). */
-const MASK_NUM_RE = '\\d[\\d\\u202f]*(?:,\\d+)?(?:[kKM])?';
+const MASK_NUM_RE = '\\d[\\d\\u202f]*(?:[.,]\\d+)?(?:[kKM])?';
 
 /* Regroup standalone numbers in `text` (dates & identifiers preserved).
    Collapses any existing NBSP grouping then regroups the whole run so
    mid-typing states like "1<NBSP>2345" become "12 345", not "1 2345". */
-function regroupText(text){
+function regroupText(text, caret){
+  if(caret===undefined) caret=-1;
   let out=''; let i=0; const n=text.length;
   let prevChar='';
   while(i<n){
     const rest=text.slice(i);
-    // date -> passthrough
-    const dm=rest.match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b/);
-    if(dm && isDateMatch(dm[1],dm[2])){ out+=dm[0]; i+=dm[0].length; prevChar=dm[0].slice(-1); continue; }
+    const dm=dateAt(rest);
+    if(dm){ out+=dm[0]; i+=dm[0].length; prevChar=dm[0].slice(-1); continue; }
     const ch=text[i];
     if(/\d/.test(ch)){
       if(/[\p{L}_]/u.test(prevChar)){ // part of identifier -> passthrough alnum run
         const wm=rest.match(/^[\p{L}\d_]+/u); out+=wm[0]; i+=wm[0].length; prevChar=wm[0].slice(-1); continue;
       }
-      const nm=rest.match(new RegExp('^'+MASK_NUM_RE));   // digits + NBSP only
+      const nm=rest.match(new RegExp('^'+MASK_NUM_RE));
       let tok=nm[0];
       let suffix=''; if(/[kKM]$/.test(tok)){ suffix=tok.slice(-1); tok=tok.slice(0,-1); }
-      let [ip,fp]=tok.replace(GROUP_RE,'').split(',');    // strip NBSP, keep run whole
+      const hadDot=/\./.test(tok);
+      let [ip,fp]=tok.replace(GROUP_RE,'').split(/[.,]/);
       ip=groupDigits(ip);
-      out+= ip + (fp!==undefined? (','+fp):'') + suffix;
+      // a dot decimal becomes a comma, unless the caret is still inside this
+      // token (so a date like 12.05 can be finished before it flips to 12,05)
+      const underCaret = caret>=i && caret<=i+nm[0].length;
+      const sep = (hadDot && underCaret) ? '.' : ',';
+      out+= ip + (fp!==undefined? (sep+fp):'') + suffix;
       i+=nm[0].length; prevChar=nm[0].slice(-1); continue;
     }
     out+=ch; i++; prevChar=ch;
@@ -875,11 +924,16 @@ function applyMask(){
   const val=input.value;
   const caret=input.selectionStart;
   const nonSepBefore=countNonSep(val, caret);
-  const masked=regroupText(val);
+  const masked=regroupText(val, caret);
   if(masked===val) return;
   const newCaret=posAfterNonSep(masked, nonSepBefore);
   input.value=masked;
   input.setSelectionRange(newCaret,newCaret);
+}
+/* On blur, flip any lingering dot decimals to comma (canonical form). */
+function canonicalizeNumbers(){
+  const masked=regroupText(input.value, -1);
+  if(masked!==input.value){ const c=input.selectionStart; input.value=masked; input.setSelectionRange(c,c); render(); scheduleSave(); }
 }
 function countNonSep(s, upto){ let c=0; for(let k=0;k<upto;k++) if(s[k]!==NBSP) c++; return c; }
 function posAfterNonSep(s, count){ let c=0,k=0; for(;k<s.length;k++){ if(c===count) return k; if(s[k]!==NBSP) c++; } return s.length; }
@@ -943,6 +997,9 @@ function scheduleSave(){
   saveTimer=setTimeout(persist,300);
 }
 
+function makeTasksDoc(){
+  return { id:uid(), name:'Задачи', protected:true, text:DEFAULT_DOC, lineColors:{} };
+}
 function load(){
   let s=null;
   try{ s=JSON.parse(localStorage.getItem(STORE_KEY)||'null'); }catch(e){}
@@ -951,15 +1008,18 @@ function load(){
   }else{
     // migrate from v1 single-document format, or start fresh
     let old=null; try{ old=JSON.parse(localStorage.getItem('calcuta.v1')||'null'); }catch(e){}
-    const d={ id:uid(), name:'Черновик',
-              text:(old&&old.text)||DEFAULT_DOC,
-              lineColors:(old&&old.lineColors)||{} };
-    store={ docs:[d], activeId:d.id, tags:(old&&old.tags)||[] };
+    store={ docs:[], activeId:null, tags:(old&&old.tags)||[] };
+    if(old && old.text) store.docs.push({id:uid(), name:'Черновик', text:old.text, lineColors:old.lineColors||{}});
   }
-  if(!store.docs.length){ store.docs.push({id:uid(),name:'Черновик',text:DEFAULT_DOC,lineColors:{}}); }
   store.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; if(!d.id) d.id=uid(); });
-  if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
   if(!store.tags) store.tags=[];
+  // ensure the stock, undeletable "Задачи" document exists (pinned to top)
+  if(!store.docs.some(d=>d.protected)){
+    const tasks=makeTasksDoc();
+    store.docs.unshift(tasks);
+    if(!store.docs.length || !store.activeId) store.activeId=tasks.id;
+  }
+  if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
 
   loadActiveIntoEditor();
   renderTags();
@@ -998,13 +1058,16 @@ function createDoc(){
   persist();
   const ti=$('doc-title'); if(ti){ ti.focus(); ti.select(); }
 }
+/* Ask for confirmation before deleting (protected docs can't be deleted). */
+function requestDeleteDoc(id){
+  const d=store.docs.find(x=>x.id===id);
+  if(!d || d.protected) return;
+  askConfirm('Удалить документ «'+(d.name||'Без названия')+'»? Это действие необратимо.',
+             ()=>deleteDoc(id));
+}
 function deleteDoc(id){
   const idx=store.docs.findIndex(d=>d.id===id);
-  if(idx<0) return;
-  if(store.docs.length===1){    // never leave zero docs — reset the last one
-    store.docs[0].text=''; store.docs[0].lineColors={}; store.docs[0].name='Черновик';
-    loadActiveIntoEditor(); renderDocs(); persist(); return;
-  }
+  if(idx<0 || store.docs[idx].protected) return;
   const wasActive=(store.activeId===id);
   store.docs.splice(idx,1);
   if(wasActive){ store.activeId=store.docs[Math.max(0,idx-1)].id; loadActiveIntoEditor(); }
@@ -1033,10 +1096,25 @@ function renderDocs(){
       if(cnt>0){ cls+=' match'; badge='<span class="doc-badge">'+cnt+'</span>'; }
       else cls+=' dim';
     }
-    return '<div class="doc-item'+cls+'" data-id="'+d.id+'">'
-      +'<span class="doc-name">'+esc(d.name||'Без названия')+'</span>'+badge
-      +'<button class="doc-del" data-id="'+d.id+'" title="удалить документ">×</button></div>';
+    const del=d.protected ? '' : '<button class="doc-del" data-id="'+d.id+'" title="удалить документ">×</button>';
+    const pin=d.protected ? '<span class="doc-pin" title="стоковая страница">📌</span>' : '';
+    return '<div class="doc-item'+cls+(d.protected?' protected':'')+'" data-id="'+d.id+'">'
+      +'<span class="doc-name">'+esc(d.name||'Без названия')+'</span>'+badge+pin+del+'</div>';
   }).join('');
+}
+
+/* ---------- custom confirmation dialog (works inside sandboxed iframes) ---------- */
+let confirmCb=null;
+function askConfirm(msg, onOk){
+  confirmCb=onOk;
+  $('confirm-msg').textContent=msg;
+  $('confirm-overlay').classList.add('open');
+  $('confirm-ok').focus();
+}
+function closeConfirm(run){
+  $('confirm-overlay').classList.remove('open');
+  const cb=confirmCb; confirmCb=null;
+  if(run && cb) cb();
 }
 
 /* ================================================================
@@ -1218,13 +1296,52 @@ function onInput(){
 }
 function onChange(){ render(); scheduleSave(); }
 
-/* Replace the whole document, keeping mask + caret consistent. */
+/* Replace the whole document, keeping indent, mask and caret consistent. */
 function commitValue(newText, caret){
   input.value=newText;
   const c=Math.max(0,Math.min(caret==null?newText.length:caret,newText.length));
   input.setSelectionRange(c,c);
+  autoIndent();
   applyMask();
   onChange();
+}
+
+/* ---------- invisible indent: the caret behaves as if there were no indent ----------
+   The hierarchy indent is real whitespace (for visual layout + monospace
+   alignment), but navigation treats each line as starting at its first
+   non-indent character, so it "feels" like an ordinary un-indented line. */
+function lineBounds(pos){
+  const v=input.value;
+  const lineStart=v.lastIndexOf('\n',pos-1)+1;
+  let lineEnd=v.indexOf('\n',pos); if(lineEnd<0) lineEnd=v.length;
+  const indentLen=(v.slice(lineStart,lineEnd).match(/^[ \t]*/)[0]).length;
+  return {lineStart, indentLen, contentStart:lineStart+indentLen, lineEnd};
+}
+function snapCaret(){
+  if(input.selectionStart!==input.selectionEnd) return;   // leave selections alone
+  const pos=input.selectionStart;
+  const {contentStart}=lineBounds(pos);
+  if(pos<contentStart) input.setSelectionRange(contentStart,contentStart);
+}
+function onEditorKeydown(e){
+  const collapsed=input.selectionStart===input.selectionEnd;
+  if(e.key==='Backspace' && !e.shiftKey && collapsed){
+    const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos);
+    if(pos<=contentStart && lineStart>0){       // at (visual) line start → merge up
+      e.preventDefault();
+      const v=input.value;
+      commitValue(v.slice(0,lineStart-1)+v.slice(contentStart), lineStart-1);
+      return;
+    }
+  }
+  if(e.key==='ArrowLeft' && !e.shiftKey && collapsed){
+    const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos);
+    if(pos<=contentStart && lineStart>0){ e.preventDefault(); input.setSelectionRange(lineStart-1,lineStart-1); return; }
+  }
+  if(e.key==='Home' && !e.shiftKey){
+    const {contentStart}=lineBounds(input.selectionStart);
+    e.preventDefault(); input.setSelectionRange(contentStart,contentStart); return;
+  }
 }
 
 /* ---------- delete a line (right-click menu / swipe) ---------- */
@@ -1290,8 +1407,8 @@ function closeLineMenu(){ linemenu.classList.remove('open'); lineMenuTarget=-1; 
 function onStackCtx(e){
   const {row}=hitTest(e.clientX,e.clientY);
   const lines=model?model.data.lines:[];
-  // custom menu only over checkbox (task) lines — keep native menu elsewhere
-  if(row>=0 && row<lines.length && lines[row].cls.kind==='checkbox'){
+  // custom menu on any line (right-click → delete)
+  if(row>=0 && row<lines.length){
     e.preventDefault();
     closeCtxMenu();
     openLineMenu(e.clientX,e.clientY,row);
@@ -1407,48 +1524,60 @@ function onPaste(e){
   document.execCommand('insertText',false,normalized);
 }
 function normalizePasted(txt){
-  // Convert loose numbers (1,234.56 / 1 234,56 / 1234.5) to app format.
-  return txt.replace(/\d[\d.,   ]*\d|\d/g, (m)=>{
-    // ignore date-looking dd.mm(.yyyy)
-    const dm=m.match(/^(\d{1,2})\.(\d{1,2})(?:\.\d{2,4})?$/);
-    if(dm && isDateMatch(dm[1],dm[2])) return m;
-    let s=m.replace(/[   ]/g,'');
-    // decide decimal separator: last '.' or ',' followed by 1-2..n digits, only if single
-    let dec=null;
-    const lastComma=s.lastIndexOf(','), lastDot=s.lastIndexOf('.');
-    const sep=Math.max(lastComma,lastDot);
-    if(sep>=0){
-      const tail=s.slice(sep+1);
-      if(/^\d+$/.test(tail) && tail.length<=6 && (s.slice(0,sep).match(/[.,]/g)||[]).length>=0){
-        // treat as decimal if there are digits after and it's the last separator
-        dec=sep;
-      }
-    }
+  // Convert loose numbers (1,234.56 / 1234.5 / 714285,71428571) to app format:
+  // the decimal separator (dot or comma) becomes a comma, thousands regroup.
+  return txt.replace(/\d[\d.,]*\d|\d/g, (m)=>{
+    const dm=dateAt(m); if(dm && dm[0]===m) return m;   // keep pure dates
+    const lastSep=Math.max(m.lastIndexOf(','), m.lastIndexOf('.'));
     let intp, frac='';
-    if(dec!==null){ intp=s.slice(0,dec).replace(/[.,]/g,''); frac=s.slice(dec+1); }
-    else{ intp=s.replace(/[.,]/g,''); }
+    if(lastSep>=0){
+      const tail=m.slice(lastSep+1);
+      if(/^\d+$/.test(tail)){ intp=m.slice(0,lastSep).replace(/[.,]/g,''); frac=tail; }
+      else { intp=m.replace(/[.,]/g,''); }
+    } else { intp=m; }
     if(!/^\d+$/.test(intp)) return m;
-    let out=groupDigits(intp)+(frac?(','+frac):'');
-    return out;
+    return groupDigits(intp)+(frac?(','+frac):'');
   });
 }
 
-/* ---------- gutter selection ---------- */
-let lastGutterClick=-1;
-function onGutterClick(e){
+/* ---------- gutter selection (click, shift/ctrl, and drag over numbers) ---------- */
+let lastGutterClick=-1, gutterDrag=false, dragAnchor=-1, dragAdditive=false;
+
+/* Line index under a y coordinate within the gutter (scroll-aware). */
+function gutterLineAt(clientY){
+  const r=gutter.getBoundingClientRect();
+  const n=model?model.data.lines.length:0;
+  const i=Math.floor((clientY-r.top-14)/24);   // minus padY
+  return Math.max(0, Math.min(n-1, i));
+}
+function onGutterDown(e){
+  if(e.button!==0) return;                      // left button only
   const el=e.target.closest('.gutter-line'); if(!el) return;
   const i=+el.dataset.i;
   if(e.shiftKey && lastGutterClick>=0){
     const [a,b]=[Math.min(lastGutterClick,i),Math.max(lastGutterClick,i)];
     for(let k=a;k<=b;k++) selectedGutter.add(k);
+    dragAnchor=lastGutterClick;
   }else if(e.metaKey||e.ctrlKey){
     selectedGutter.has(i)?selectedGutter.delete(i):selectedGutter.add(i);
-    lastGutterClick=i;
+    lastGutterClick=i; dragAnchor=i;
   }else{
-    selectedGutter.clear(); selectedGutter.add(i); lastGutterClick=i;
+    selectedGutter.clear(); selectedGutter.add(i); lastGutterClick=i; dragAnchor=i;
   }
+  gutterDrag=true; dragAdditive=(e.metaKey||e.ctrlKey);
+  refreshGutterSel();
+  e.preventDefault();                           // avoid text selection while dragging
+}
+function onGutterDragMove(e){
+  if(!gutterDrag) return;
+  const cur=gutterLineAt(e.clientY);
+  const [a,b]=[Math.min(dragAnchor,cur),Math.max(dragAnchor,cur)];
+  if(!dragAdditive){ selectedGutter.clear(); }
+  for(let k=a;k<=b;k++) selectedGutter.add(k);
+  lastGutterClick=cur;
   refreshGutterSel();
 }
+function onGutterUp(){ gutterDrag=false; }
 function refreshGutterSel(){
   gutter.querySelectorAll('.gutter-line').forEach(el=>{
     el.classList.toggle('selected', selectedGutter.has(+el.dataset.i));
@@ -1506,6 +1635,10 @@ function boot(){
   input.addEventListener('input', onInput);
   input.addEventListener('compositionstart', ()=>composing=true);
   input.addEventListener('compositionend', ()=>{ composing=false; onInput(); });
+  input.addEventListener('keydown', onEditorKeydown);
+  input.addEventListener('keyup', e=>{ if(e.key.startsWith('Arrow')||e.key==='Home'||e.key==='End'||e.key.startsWith('Page')) snapCaret(); });
+  input.addEventListener('mouseup', ()=>setTimeout(snapCaret,0));
+  input.addEventListener('blur', canonicalizeNumbers);
   input.addEventListener('copy', stripOnCopy);
   input.addEventListener('cut', stripOnCopy);
   input.addEventListener('paste', onPaste);
@@ -1522,7 +1655,9 @@ function boot(){
     const hit=e.target.closest('.cbox-hit'); if(hit){ toggleCheckbox(+hit.dataset.i); }
   });
 
-  gutter.addEventListener('click', onGutterClick);
+  gutter.addEventListener('mousedown', onGutterDown);
+  document.addEventListener('mousemove', onGutterDragMove);
+  document.addEventListener('mouseup', onGutterUp);
   gutter.addEventListener('contextmenu', onGutterCtx);
 
   results.addEventListener('click', onResultsClick);
@@ -1559,8 +1694,17 @@ function boot(){
   $('doc-add').addEventListener('click', createDoc);
   $('doc-list').addEventListener('click', e=>{
     const del=e.target.closest('.doc-del');
-    if(del){ e.stopPropagation(); deleteDoc(del.dataset.id); return; }
+    if(del){ e.stopPropagation(); requestDeleteDoc(del.dataset.id); return; }
     const item=e.target.closest('.doc-item'); if(item) switchDoc(item.dataset.id);
+  });
+  // confirmation dialog
+  $('confirm-ok').addEventListener('click', ()=>closeConfirm(true));
+  $('confirm-cancel').addEventListener('click', ()=>closeConfirm(false));
+  $('confirm-overlay').addEventListener('click', e=>{ if(e.target.id==='confirm-overlay') closeConfirm(false); });
+  document.addEventListener('keydown', e=>{
+    if(!$('confirm-overlay').classList.contains('open')) return;
+    if(e.key==='Escape') closeConfirm(false);
+    else if(e.key==='Enter') closeConfirm(true);
   });
   // editable title
   const ti=$('doc-title');
@@ -1587,7 +1731,7 @@ function boot(){
 document.addEventListener('DOMContentLoaded', boot);
 
 /* expose a tiny hook for automated testing */
-window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, tokenizeMath};
+window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, tokenizeMath, normalizePasted, dateAt};
 
 })();
 </script>
