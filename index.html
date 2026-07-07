@@ -26,7 +26,7 @@
   --dim-2:#4d4941;
   --accent:#c96442;        /* Claude clay */
   --accent-soft:rgba(201,100,66,.16);
-  --var:#c79bf0;           /* variables (purple) — top priority */
+  --var:#88c892;           /* variables (soft green) — top priority */
   --super:#b98cf5;         /* supertask // (purple) */
   --date:#e3b755;          /* dates dd.mm (yellow) */
   --num:#7ec8f5;           /* numbers in a computation (sky blue) */
@@ -59,7 +59,8 @@ body{
 ::selection{background:var(--sel)}
 button{font-family:inherit;color:inherit}
 
-#app{display:flex;height:100vh;width:100vw}
+#app{display:flex;height:100vh;width:100vw;position:relative}
+#backdrop{display:none}
 
 /* ---------- Sidebar ---------- */
 #sidebar{
@@ -68,7 +69,7 @@ button{font-family:inherit;color:inherit}
   display:flex;flex-direction:column;min-height:0;overflow:hidden;
   transition:margin-left .18s ease;
 }
-#sidebar.collapsed{margin-left:-251px}   /* fully off-screen (incl. border) */
+#app.sidebar-hidden #sidebar{margin-left:-251px}   /* fully off-screen (incl. border) */
 .brand{
   display:flex;align-items:center;gap:9px;
   padding:16px 18px 14px;border-bottom:1px solid var(--border-soft);
@@ -248,6 +249,8 @@ button{font-family:inherit;color:inherit}
 #highlight .var{color:var(--var);font-weight:500}
 #highlight .tag{font-weight:500;border-radius:4px}
 #highlight .sub{color:var(--text-strong)}
+#highlight .rpill{color:var(--result);border-radius:9px;
+  background:rgba(143,199,168,.12);box-shadow:0 0 0 1px var(--result)}
 #highlight .checkmark{color:var(--result);font-weight:600}
 #highlight .cbox{color:var(--dim)}
 .hl-line.checked{color:var(--checked-text)}
@@ -349,13 +352,24 @@ button{font-family:inherit;color:inherit}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
 @media (max-width:720px){
-  #sidebar{position:absolute;z-index:40;height:100%;box-shadow:0 0 40px rgba(0,0,0,.5)}
+  /* Sidebar becomes an overlay BELOW the top bar so the ☰ toggle is never
+     covered and stays clickable. */
+  #sidebar{position:absolute;top:44px;left:0;height:calc(100% - 44px);z-index:40;
+    box-shadow:0 0 40px rgba(0,0,0,.5)}
+  #backdrop{display:block;position:absolute;inset:44px 0 0 0;z-index:39;
+    background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .18s}
+  #app:not(.sidebar-hidden) #backdrop{opacity:1;pointer-events:auto}
+  #app.sidebar-hidden #sidebar{margin-left:-251px}
   :root{--results-w:104px;--gutter-w:44px}
 }
+/* keep the toggle above the overlay everywhere */
+#toggle-sidebar{position:relative;z-index:41;flex:0 0 auto}
+.title-input{flex:1 1 auto;min-width:60px}
 </style>
 
 <!-- ================= MARKUP ================= -->
 <div id="app">
+  <div id="backdrop"></div>
   <aside id="sidebar">
     <div class="brand">
       <div class="logo">∑</div>
@@ -387,7 +401,7 @@ button{font-family:inherit;color:inherit}
         <h3 class="side-title">Синтаксис</h3>
         <div class="cheat">
           <div class="row"><code>2*8 + 10%</code><span class="desc">живой расчёт справа</span></div>
-          <div class="row"><code>x = 500k</code><span class="desc">переменная (фиолетовый)</span></div>
+          <div class="row"><code>x = 500k</code><span class="desc">переменная (зелёный)</span></div>
           <div class="row"><code>sum · сумм</code><span class="desc">сумма блока · prev · avg</span></div>
           <div class="row"><code>++</code><span class="desc">строка → чекбокс</span></div>
           <div class="row"><code>//</code><span class="desc">надзадача (фиолетовый)</span></div>
@@ -452,6 +466,10 @@ button{font-family:inherit;color:inherit}
 
 const NBSP = ' ';           // narrow no-break space — visual thousands separator
 const GROUP_RE = new RegExp(NBSP, 'g');
+const OSP  = ' ';      // U+00A0 no-break space — visual padding around operators
+function isFmtWS(ch){ return ch===NBSP || ch===OSP; }
+const SENT = '\u2063';     // invisible marker: a copied result → inline pill
+function isCore(ch){ return !isFmtWS(ch) && ch!==SENT; }
 
 /* Group the integer part every 3 digits with NBSP. */
 function groupDigits(intStr){
@@ -521,7 +539,7 @@ function tokenizeMath(text, vars){
   const varNames = [...vars].sort((a,b)=>b.length-a.length);
   while(i<n){
     const c = text[i];
-    if(c===' '||c==='\t'){ i++; continue; }
+    if(c===' '||c==='\t'||c===OSP||c===SENT){ i++; continue; }
     // date -> skip (treated as context for math)
     const dm = dateAt(text.slice(i));
     if(dm){ i+=dm[0].length; continue; }
@@ -743,6 +761,7 @@ function buildLineHTML(item, vars, varDefLine, tags){
   const cmeta =new Array(len).fill(null); // {type, defLine} for hover
   const prio  =new Array(len).fill(-1);
   const color =new Array(len).fill(null); // inline color (tags)
+  const pill  =new Array(len).fill(false);// number is a copied result → pill
 
   function paint(s,e,cls,pr,meta,col){
     for(let k=s;k<e&&k<len;k++){
@@ -810,6 +829,15 @@ function buildLineHTML(item, vars, varDefLine, tags){
     }
   }
 
+  // ---- copied-result pills: a SENT marker → render the number that follows
+  //      it (with an optional leading minus) in an inline oval pill. ----
+  for(let s=bodyStart;s<len;s++){
+    if(raw[s]===SENT){
+      const m=raw.slice(s+1).match(new RegExp('^-?(?:'+NUM_RE.source+')'));
+      if(m){ for(let j=s+1;j<s+1+m[0].length;j++) pill[j]=true; }
+    }
+  }
+
   // ---- checkbox marker: render the LITERAL "[ ]"/"[x]" so column widths
   //      stay identical to the textarea. The bracket may be preceded by
   //      hierarchy indent, so anchor it at cls.indent, not at 0. ----
@@ -822,20 +850,17 @@ function buildLineHTML(item, vars, varDefLine, tags){
                + '<span class="cbox">'+esc(raw.slice(ind+3,markerLen))+'</span>';
   }
 
-  // Build body spans, grouping consecutive same class+color.
+  // Build body spans, grouping consecutive same class+color+pill.
   let bodyHTML='';
   let k=bodyStart;
   while(k<len){
-    const cl=cclass[k], col=color[k];
+    const cl=cclass[k], col=color[k], pl=pill[k];
     let j=k+1;
-    while(j<len && cclass[j]===cl && color[j]===col) j++;
+    while(j<len && cclass[j]===cl && color[j]===col && pill[j]===pl) j++;
     const chunk=esc(raw.slice(k,j));
-    if(cl){
-      const style=col? ' style="color:'+col+'"' : '';
-      bodyHTML+='<span class="'+cl+'"'+style+'>'+chunk+'</span>';
-    }else{
-      bodyHTML+='<span class="'+(cls.kind==='text'?'sub':'')+'">'+chunk+'</span>';
-    }
+    const cls2=(cl||(cls.kind==='text'?'sub':''))+(pl?' rpill':'');
+    const style=col? ' style="color:'+col+'"' : '';
+    bodyHTML+= cls2 ? '<span class="'+cls2.trim()+'"'+style+'>'+chunk+'</span>' : '<span>'+chunk+'</span>';
     k=j;
   }
 
@@ -919,24 +944,67 @@ function regroupText(text, caret){
   return out;
 }
 
-/* Apply masking to the textarea, preserving caret by counting non-NBSP chars. */
+/* Pad binary math operators with a no-break space on each side so they stand
+   out. Only OSP is added (never user characters removed), and it is skipped by
+   the caret bookkeeping, so ordinary prose spacing is untouched. Heading lines
+   (// and #) are left alone; a "-" is only padded next to a number so hyphens
+   in words ("cost-benefit") are not split. */
+function spaceOps(text){
+  return text.split('\n').map(line=>{
+    const cls=classify(line);
+    if(cls.kind==='super'||cls.kind==='header') return line;   // no op padding in headings
+    return line.slice(0,cls.markerLen)+spaceOpsContent(line.slice(cls.markerLen));
+  }).join('\n');
+}
+function spaceOpsContent(s){
+  const n=s.length; let out='';
+  const lastCore=()=>{ for(let k=out.length-1;k>=0;k--){ const c=out[k]; if(isCore(c)&&c!==' '&&c!=='\t') return c; } return ''; };
+  const nextCore=(from)=>{ for(let k=from;k<n;k++){ const c=s[k]; if(isCore(c)&&c!==' '&&c!=='\t') return c; } return ''; };
+  for(let i=0;i<n;i++){
+    const ch=s[i];
+    if('+-*/^='.includes(ch)){
+      const lc=lastCore(), rc=nextCore(i+1);
+      const isPM=(ch==='+'||ch==='-');
+      if(isPM && !/[\d)\p{L}%]/u.test(lc)){ out+=ch; continue; }   // unary +/- → attach
+      const digitAdj=/\d/.test(lc)||/\d/.test(rc);
+      const always=(ch==='*'||ch==='^'||ch==='=');
+      if(always || digitAdj){
+        const lo=out.length?out[out.length-1]:'';
+        if(lo!=='' && !isFmtWS(lo) && lo!==' ' && lo!=='\t') out+=OSP;
+        out+=ch;
+        const nx=s[i+1]||'';
+        if(nx!=='' && !isFmtWS(nx) && nx!==' ' && nx!=='\t') out+=OSP;
+        continue;
+      }
+    }
+    out+=ch;
+  }
+  return out;
+}
+
+/* Full format pass: group numbers, dot→comma, then pad operators. Both
+   grouping (NBSP) and operator padding (OSP) are formatter whitespace, so the
+   caret is preserved by counting the core (non-formatter) characters. */
+function formatAll(text, caret){ return spaceOps(regroupText(text, caret)); }
+
+/* Apply masking to the textarea, preserving caret by counting core chars. */
 function applyMask(){
   const val=input.value;
   const caret=input.selectionStart;
-  const nonSepBefore=countNonSep(val, caret);
-  const masked=regroupText(val, caret);
+  const coreBefore=countNonSep(val, caret);
+  const masked=formatAll(val, caret);
   if(masked===val) return;
-  const newCaret=posAfterNonSep(masked, nonSepBefore);
+  const newCaret=posAfterNonSep(masked, coreBefore);
   input.value=masked;
   input.setSelectionRange(newCaret,newCaret);
 }
 /* On blur, flip any lingering dot decimals to comma (canonical form). */
 function canonicalizeNumbers(){
-  const masked=regroupText(input.value, -1);
+  const masked=formatAll(input.value, -1);
   if(masked!==input.value){ const c=input.selectionStart; input.value=masked; input.setSelectionRange(c,c); render(); scheduleSave(); }
 }
-function countNonSep(s, upto){ let c=0; for(let k=0;k<upto;k++) if(s[k]!==NBSP) c++; return c; }
-function posAfterNonSep(s, count){ let c=0,k=0; for(;k<s.length;k++){ if(c===count) return k; if(s[k]!==NBSP) c++; } return s.length; }
+function countNonSep(s, upto){ let c=0; for(let k=0;k<upto;k++) if(isCore(s[k])) c++; return c; }
+function posAfterNonSep(s, count){ let c=0,k=0; for(;k<s.length;k++){ if(c===count) return k; if(isCore(s[k])) c++; } return s.length; }
 
 /* ---------- render pipeline ---------- */
 function render(){
@@ -1285,11 +1353,27 @@ function autoIndent(){
   input.setSelectionRange(nc,nc);
 }
 
+/* Auto-insert a space after "//" on the caret line ("//text" → "// text"). */
+function transformSlashSpace(){
+  const val=input.value, caret=input.selectionStart;
+  const lineStart=val.lastIndexOf('\n',caret-1)+1;
+  let lineEnd=val.indexOf('\n',caret); if(lineEnd<0) lineEnd=val.length;
+  const line=val.slice(lineStart,lineEnd);
+  const m=/^(\s*)\/\/(?=[^\/\s])/.exec(line);   // // immediately followed by a non-space, non-slash
+  if(m){
+    const idx=lineStart+m[1].length+2;
+    input.value=val.slice(0,idx)+' '+val.slice(idx);
+    const nc = caret>=idx ? caret+1 : caret;
+    input.setSelectionRange(nc,nc);
+  }
+}
+
 /* ---------- main change handler ---------- */
 let composing=false;
 function onInput(){
   if(composing) return;
   transformDoubleplus();
+  transformSlashSpace();
   autoIndent();
   applyMask();
   onChange();
@@ -1506,7 +1590,7 @@ function stripOnCopy(e){
   const ta=input;
   const s=ta.selectionStart, en=ta.selectionEnd;
   if(document.activeElement===ta && en>s){
-    const txt=ta.value.slice(s,en).replace(GROUP_RE,'');
+    const txt=ta.value.slice(s,en).replace(GROUP_RE,'').replace(/ /g,' ');  // strip grouping, op-pad→space
     e.clipboardData.setData('text/plain',txt);
     e.preventDefault();
     if(e.type==='cut'){
@@ -1602,7 +1686,7 @@ function applyLineColor(color){
 function onResultsClick(e){
   const el=e.target.closest('.result-line.has'); if(!el) return;
   const v=el.dataset.v||'';
-  copyText(v);
+  copyText(SENT+v);           // sentinel makes a pasted result render as an inline pill
   el.classList.add('copied');
   setTimeout(()=>el.classList.remove('copied'),450);
   showToast('Скопировано: '+v);
@@ -1688,7 +1772,10 @@ function boot(){
     store.tags.splice(+del.dataset.i,1); renderTags(); render(); scheduleSave();
   });
 
-  $('toggle-sidebar').addEventListener('click', ()=>$('sidebar').classList.toggle('collapsed'));
+  const appEl=$('app');
+  $('toggle-sidebar').addEventListener('click', ()=>appEl.classList.toggle('sidebar-hidden'));
+  $('backdrop').addEventListener('click', ()=>appEl.classList.add('sidebar-hidden'));
+  if(window.innerWidth<=720) appEl.classList.add('sidebar-hidden');   // collapse by default on small screens
 
   // documents
   $('doc-add').addEventListener('click', createDoc);
