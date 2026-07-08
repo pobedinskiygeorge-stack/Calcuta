@@ -1343,6 +1343,12 @@ function load(){
     // only "tasks"/"personal" are real pinned roles — clear any stray value so
     // no extra document shows up pinned/undeletable.
     if(d.protected && d.protected!=='tasks' && d.protected!=='personal') delete d.protected;
+    // Legacy docs from before stock pages got a `protected` flag / fixed id
+    // are recognized only by their exact reserved name. Without this they
+    // survive as a second, unpinned "Задачи"/"Личное" alongside the real
+    // pinned one instead of being folded into it.
+    if(!d.protected && d.name==='Задачи') d.protected='tasks';
+    if(!d.protected && d.name==='Личное') d.protected='personal';
     const cid=canonicalDocId(d);
     if(cid!==d.id){ if(store.activeId===d.id) store.activeId=cid; d.id=cid; }   // pin protected docs to their fixed id
     // pre-sync docs had no per-doc timestamp: seed from the store-level one
@@ -2432,7 +2438,16 @@ function parseRemote(raw){
   if(!raw||!raw.data) return null;
   let s; try{ s=JSON.parse(raw.data); }catch(e){ return null; }
   if(!s||!Array.isArray(s.docs)) return null;
-  s.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; if(!d.id) d.id=uid(); d.id=canonicalDocId(d); if(typeof d.updated!=='number') d.updated=0; });
+  s.docs.forEach(d=>{
+    if(!d.lineColors) d.lineColors={};
+    if(!d.id) d.id=uid();
+    if(d.protected && d.protected!=='tasks' && d.protected!=='personal') delete d.protected;
+    // fold legacy pre-fixed-id stock docs (recognized by exact reserved name) into the canonical pinned slot
+    if(!d.protected && d.name==='Задачи') d.protected='tasks';
+    if(!d.protected && d.name==='Личное') d.protected='personal';
+    d.id=canonicalDocId(d);
+    if(typeof d.updated!=='number') d.updated=0;
+  });
   if(!s.tags) s.tags=[];
   if(typeof s.tagsUpdated!=='number') s.tagsUpdated=0;
   // older cloud copies stored tags without per-tag timestamps
