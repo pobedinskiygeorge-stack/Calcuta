@@ -2495,10 +2495,18 @@ function subscribeCloud(){
   cloudRef=db.collection('users').doc(currentUser.uid);
   let first=true;
   if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
-  cloudUnsub=cloudRef.onSnapshot(snap=>{
+  cloudUnsub=cloudRef.onSnapshot({includeMetadataChanges:true}, snap=>{
     if(snap.metadata.hasPendingWrites) return;      // our own optimistic write echoing back
+    // Only ever reconcile/seed against AUTHORITATIVE SERVER data. When a phone
+    // boots offline or with a cold cache, Firestore first delivers a fromCache
+    // snapshot that reports the cloud doc as missing (or stale). Acting on it
+    // would run the "cloud is empty → seed it" branch below and push THIS
+    // device's freshly-seeded STOCK content over the real cloud copy, wiping
+    // the user's notes. includeMetadataChanges guarantees we still receive the
+    // later cache→server transition even when the underlying data is unchanged.
+    if(snap.metadata.fromCache) return;
     if(!snap.exists){
-      if(first){ first=false; cloudReady=true; pushCloud(); }   // first device ever: seed the cloud
+      if(first){ first=false; cloudReady=true; pushCloud(); }   // cloud truly empty (server-confirmed): seed it
       return;
     }
     const remote=parseRemote(snap.data());
