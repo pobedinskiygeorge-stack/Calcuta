@@ -1948,13 +1948,21 @@ function initAuth(){
   firebase.initializeApp(firebaseConfig);
   auth=firebase.auth();
   db=firebase.firestore();
+  auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
   auth.onAuthStateChanged(onAuthChanged);
+  /* signInWithPopup on firebase-js-sdk v10.x intermittently throws
+     "The requested action is invalid" on re-login after sign-out
+     (github.com/firebase/firebase-js-sdk/issues/7529) — redirect flow
+     sidesteps the popup/COOP handling that triggers it. */
+  auth.getRedirectResult().catch(err=>{ statusEl.textContent='Не удалось войти: ['+err.code+'] '+err.message; });
   btn.addEventListener('click', ()=>{
     statusEl.textContent='Открываем окно входа Google…';
     btn.disabled=true;
-    auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
-      .catch(err=>{ statusEl.textContent='Не удалось войти: '+err.message; })
-      .finally(()=>{ btn.disabled=false; });
+    auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider())
+      .catch(err=>{
+        statusEl.textContent='Не удалось войти: ['+err.code+'] '+err.message;
+        btn.disabled=false;
+      });
   });
   $('signout-btn').addEventListener('click', ()=>auth.signOut());
 }
@@ -1970,6 +1978,11 @@ function onAuthChanged(user){
   }
 }
 
+function syncError(err){
+  const btn=$('signout-btn');
+  btn.title=err ? 'Ошибка синхронизации: ['+err.code+'] '+err.message : 'Выйти из аккаунта';
+  if(err) console.error('cloud sync error', err);
+}
 /* Pull the cloud copy once on sign-in (adopt it if newer than what we have
    locally), then keep listening for changes made from other devices. */
 function subscribeCloud(){
@@ -1982,8 +1995,8 @@ function subscribeCloud(){
     cloudUnsub=ref.onSnapshot(snap=>{
       if(!snap.exists || snap.metadata.hasPendingWrites) return;   // ignore our own writes
       applyRemoteIfNewer(snap.data());
-    });
-  }).catch(()=>{});
+    }, syncError);
+  }).catch(syncError);
 }
 /* Adopt an incoming cloud store only if it's actually newer, and never while
    the user is actively typing (would yank text out from under them). */
@@ -2007,7 +2020,8 @@ function cloudSave(){
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer=setTimeout(()=>{
     db.collection('users').doc(currentUser.uid)
-      .set({ data: JSON.stringify(store), updated: store.updated }).catch(()=>{});
+      .set({ data: JSON.stringify(store), updated: store.updated })
+      .then(()=>syncError(null)).catch(syncError);
   }, 400);
 }
 
