@@ -2115,18 +2115,47 @@ function initAuth(){
   db=firebase.firestore();
   auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
   auth.onAuthStateChanged(onAuthChanged);
-  /* signInWithRedirect requires third-party cookies between this site's
-     domain and the *.firebaseapp.com authDomain to relay the result back —
-     Safari 16.1+, Firefox 109+ and Chrome 115+ all block that by default,
-     so the redirect silently drops the user back at the sign-in screen
-     with no error (firebase.google.com/docs/auth/web/redirect-best-practices).
-     signInWithPopup avoids the cross-domain cookie dependency entirely. */
+  // Completes a signInWithRedirect() round trip (from the popup fallback
+  // below, or any future direct call). Resolves as a no-op on an ordinary
+  // page load with no pending redirect, so it's safe to call unconditionally
+  // every time. Only .catch — success is already handled by onAuthChanged.
+  auth.getRedirectResult().catch(err=>{
+    if(err && err.code) statusEl.textContent='Не удалось войти: ['+err.code+'] '+err.message;
+  });
+  /* signInWithPopup is the default: it avoids the cross-domain cookie
+     dependency signInWithRedirect has (Safari 16.1+/Firefox 109+/Chrome
+     115+ all block third-party cookies between this site and the
+     *.firebaseapp.com authDomain by default, so a plain redirect can
+     silently drop the user back at the sign-in screen with no error —
+     firebase.google.com/docs/auth/web/redirect-best-practices). But popup's
+     own relay page (also on that authDomain) needs working sessionStorage
+     too, and on mobile Safari with cross-site tracking prevention, or
+     in-app webviews (Instagram/TikTok/Telegram etc.), that storage is
+     partitioned — throwing auth/missing-initial-state. For exactly that
+     class of failure, retry once with a full-page redirect instead of
+     giving up. A popup the user closed themselves is NOT retried — that's
+     a deliberate action, not a platform failure. */
+  const REDIRECT_FALLBACK_CODES = new Set([
+    'auth/missing-initial-state',
+    'auth/popup-blocked',
+    'auth/web-storage-unsupported',
+    'auth/operation-not-supported-in-this-environment',
+  ]);
   btn.addEventListener('click', ()=>{
     statusEl.textContent='Открываем окно входа Google…';
     btn.disabled=true;
     auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
-      .catch(err=>{ statusEl.textContent='Не удалось войти: ['+err.code+'] '+err.message; })
-      .finally(()=>{ btn.disabled=false; });
+      .then(()=>{ btn.disabled=false; })
+      .catch(err=>{
+        if(REDIRECT_FALLBACK_CODES.has(err.code)){
+          statusEl.textContent='Открываем страницу входа Google…';
+          auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider())
+            .catch(err2=>{ statusEl.textContent='Не удалось войти: ['+err2.code+'] '+err2.message; btn.disabled=false; });
+          return;   // page is about to navigate away; leave the button disabled meanwhile
+        }
+        statusEl.textContent='Не удалось войти: ['+err.code+'] '+err.message;
+        btn.disabled=false;
+      });
   });
   $('signout-btn').addEventListener('click', ()=>auth.signOut());
 }
