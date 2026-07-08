@@ -263,13 +263,16 @@ button{font-family:inherit;color:inherit}
 .layer{
   margin:0;padding:var(--pad-y) var(--pad-x);
   font-family:var(--font-mono);font-size:var(--fs);line-height:var(--lh);
-  white-space:pre;tab-size:4;border:0;
+  white-space:pre-wrap;word-break:break-all;tab-size:4;border:0;
 }
 
 /* highlight is the in-flow layer that gives #stack its height */
 #highlight{position:relative;z-index:1;pointer-events:none;color:var(--text);
   width:100%;min-height:100%}
-.hl-line{height:var(--lh);width:100%}
+/* min-height (not height): a line that doesn't fit the available width wraps
+   instead of being clipped; JS keeps the gutter/results rows the same height
+   as their matching (possibly wrapped) highlight row, see render(). */
+.hl-line{min-height:var(--lh);width:100%}
 .hl-line.hover{background:var(--row-hover)}
 .hl-line.src{background:var(--row-src)}
 .hl-line.checked{background:var(--checked-bg)}
@@ -509,7 +512,7 @@ button{font-family:inherit;color:inherit}
         <div id="searchlayer"></div>
         <pre id="highlight" class="layer" aria-hidden="true"></pre>
         <textarea id="input" class="layer" spellcheck="false" autocomplete="off"
-                  autocapitalize="off" wrap="off"></textarea>
+                  autocapitalize="off"></textarea>
         <div id="hotspots"></div>
       </div>
       <div id="results-resize" title="потяните, чтобы изменить ширину"></div>
@@ -979,6 +982,18 @@ function uid(){ return 'd'+Date.now().toString(36)+Math.random().toString(36).sl
 let model=null;            // last analyze() + per-line meta
 let selectedGutter=new Set();
 let charW=8.4;             // measured monospace char width
+const LH=24;                // px per visual row — must match --lh
+let charsPerLine=1;         // how many chars fit before a line wraps
+let lineRowTop=[], lineRowCount=[];   // per-source-line cumulative offset / row span (in LH units)
+
+/* Long lines wrap instead of being clipped, so a source line can span several
+   visual rows. word-break:break-all wraps at a strict character count for a
+   monospace font, which makes it exactly predictable: charsPerLine tells us
+   how many rows a line of a given length needs, without touching the DOM. */
+function computeCharsPerLine(){
+  const w=stack.clientWidth - 2*16;   // minus left+right --pad-x
+  charsPerLine=Math.max(1, Math.floor(w/charW));
+}
 
 /* ---------- measure monospace metrics ---------- */
 function measureChar(){
@@ -1101,12 +1116,24 @@ function render(){
   model={data:A, meta:[]};
 
   const n=A.lines.length;
+
+  // A wrapped source line spans several visual rows; precompute how many
+  // and the cumulative row offset of each line so the gutter/results columns
+  // (and anything positioned by row index) line back up with it.
+  lineRowTop=new Array(n); lineRowCount=new Array(n);
+  let acc=0;
+  for(let k=0;k<n;k++){
+    const rows=Math.max(1, Math.ceil(A.lines[k].raw.length/charsPerLine));
+    lineRowTop[k]=acc; lineRowCount[k]=rows; acc+=rows;
+  }
+
   // gutter
   let g='';
   for(let k=0;k<n;k++){
     const col=doc().lineColors[k];
     const sel=selectedGutter.has(k)?' selected':'';
-    g+='<div class="gutter-line'+sel+'" data-i="'+k+'"'+(col?' style="color:'+col+'"':'')+'>'+(k+1)+'</div>';
+    const h=lineRowCount[k]*LH;
+    g+='<div class="gutter-line'+sel+'" data-i="'+k+'" style="height:'+h+'px'+(col?';color:'+col:'')+'">'+(k+1)+'</div>';
   }
   gutter.innerHTML=g;
 
@@ -1118,16 +1145,17 @@ function render(){
     hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'">'+built.html+'</div>';
 
     const it=A.lines[k];
+    const h=lineRowCount[k]*LH;
     if(it.cls.kind==='checkbox'){
-      const top=k*24 + 14;                       // lineIndex*lh + padY
-      const left=(it.cls.indent||0)*charW + 16;  // + padX
+      const top=lineRowTop[k]*LH + 14;            // cumulative row offset + padY (always row 0 of its line)
+      const left=(it.cls.indent||0)*charW + 16;   // + padX
       hs+='<div class="cbox-hit" data-i="'+k+'" style="top:'+top+'px;left:'+left+'px"></div>';
     }
     if(it.result!==null){
-      rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'">'
+      rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'" style="height:'+h+'px">'
         +'<span class="pill">'+esc(fmt(it.result))+'</span></div>';
     }else{
-      rs+='<div class="result-line" data-i="'+k+'"></div>';
+      rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px"></div>';
     }
   }
   highlight.innerHTML=hl;
@@ -1202,8 +1230,11 @@ function loadActiveIntoEditor(){
 
 /* ---------- document management ---------- */
 function switchDoc(id){
-  if(window.innerWidth<=720) $('app').classList.add('sidebar-hidden');
-  if(id===store.activeId) return;
+  if(window.innerWidth<=720){
+    $('app').classList.add('sidebar-hidden');
+    computeCharsPerLine();
+    if(id===store.activeId){ render(); return; }   // same doc: just closing the menu widened the editor, rewrap it
+  }else if(id===store.activeId) return;
   persist();                 // save current doc's text first
   store.activeId=id;
   loadActiveIntoEditor();
@@ -1310,15 +1341,23 @@ function computeMatches(){
   else if(searchIdx<0||searchIdx>=searchMatches.length) searchIdx=0;
 }
 
+/* Pixel position of a {line,col} match, accounting for the line's own
+   wrapped sub-row (col can land past the first visual row of a long line). */
+function matchPos(m){
+  const subRow=Math.floor(m.col/charsPerLine), subCol=m.col%charsPerLine;
+  const top=(lineRowTop[m.line]||0)*LH + subRow*LH + 14;   // + padY
+  const left=subCol*charW + 16;                            // + padX
+  return {top, left, subCol};
+}
 function renderSearch(){
   // marks
   if(!searchQuery){ searchlayer.innerHTML=''; }
   else{
     let html='';
     searchMatches.forEach((m,k)=>{
-      const top=m.line*24+14;                 // li*lh + padY
-      const left=m.col*charW+16;              // col*charW + padX
-      const w=m.len*charW;
+      const {top,left,subCol}=matchPos(m);
+      const len=Math.min(m.len, charsPerLine-subCol);   // clip at the wrap edge, never bleed into the next row
+      const w=len*charW;
       html+='<div class="search-mark'+(k===searchIdx?' active':'')+'" '
         +'style="top:'+top+'px;left:'+left+'px;width:'+w+'px"></div>';
     });
@@ -1367,17 +1406,13 @@ function navigateSearch(dir){
 
 function scrollToMatch(){
   const m=searchMatches[searchIdx]; if(!m) return;
-  const top=m.line*24+14;
+  const {top}=matchPos(m);
   const view=editor.clientHeight;
   if(top<editor.scrollTop+40 || top>editor.scrollTop+view-40){
     editor.scrollTop=Math.max(0, top-view/2);
   }
-  // reveal horizontally by nudging the textarea's scroll
-  const left=m.col*charW+16;
-  if(left<input.scrollLeft+40 || left>input.scrollLeft+stack.clientWidth-40){
-    input.scrollLeft=Math.max(0,left-stack.clientWidth/2);
-    syncScroll();
-  }
+  // text always wraps within the visible width now, so there's no horizontal
+  // overflow left to reveal (unlike before, when long lines could scroll off).
 }
 
 const DEFAULT_DOC=
@@ -1588,11 +1623,11 @@ function onEditorKeydown(e){
       return;
     }
     if(pos>contentStart){
-      // swapped: plain Backspace deletes a word; Ctrl/Alt+Backspace deletes one char
+      // standard keyboard behavior: plain Backspace deletes one char; Ctrl/Alt+Backspace deletes a word
       e.preventDefault();
       const v=input.value;
-      let from=(e.ctrlKey||e.altKey||e.metaKey) ? prevCharStart(v,pos,contentStart)
-                                                : prevWordStart(v,pos,contentStart);
+      let from=(e.ctrlKey||e.altKey||e.metaKey) ? prevWordStart(v,pos,contentStart)
+                                                : prevCharStart(v,pos,contentStart);
       from=clampFromPill(from);
       commitValue(v.slice(0,from)+v.slice(pos), from);
       return;
@@ -1717,12 +1752,26 @@ function setRowFx(){
   if(hoverRow>=0 && rb[hoverRow]) rb[hoverRow].classList.add('hover');
   if(srcRow>=0 && rb[srcRow]){ rb[srcRow].classList.add('src'); const gl=gutter.children[srcRow]; if(gl) gl.classList.add('src'); }
 }
+/* Given a y offset (already minus padY), find which source line it falls in
+   and which of that line's wrapped visual rows (0 = first). Mirrors the
+   lineRowTop/lineRowCount layout computed in render(). Returns row===n (one
+   past the end) if y is below all content, row===-1 if above it — same
+   "out of range" contract the plain k*24 math used to give callers. */
+function rowAtY(y){
+  if(y<0) return {row:-1, subRow:0};
+  const n=lineRowTop.length;
+  for(let k=0;k<n;k++){
+    const top=lineRowTop[k]*LH, h=lineRowCount[k]*LH;
+    if(y<top+h) return {row:k, subRow:Math.floor((y-top)/LH)};
+  }
+  return {row:n, subRow:0};
+}
 function hitTest(clientX,clientY){
   const r=stack.getBoundingClientRect();
   const y=clientY-r.top + stack.scrollTop - 14;      // minus padY
   const x=clientX-r.left + stack.scrollLeft - 16;    // minus padX
-  const row=Math.floor(y/24);
-  const col=Math.floor(x/charW);
+  const {row,subRow}=rowAtY(y);
+  const col=subRow*charsPerLine + Math.floor(x/charW);
   return {row,col};
 }
 function onStackMove(e){
@@ -1784,10 +1833,14 @@ function onTouchEnd(e){
 /* Mirror the textarea's horizontal auto-scroll (long lines) onto the overlay
    layers so highlighted text and checkbox hotspots stay pixel-aligned. */
 function syncScroll(){
-  const x='translateX('+(-input.scrollLeft)+'px)';
-  searchlayer.style.transform=x;
-  highlight.style.transform=x;
-  hotspots.style.transform=x;
+  // Text always wraps within the visible width now, so there's nothing to
+  // horizontally scroll to — but the textarea can still pick up a stray
+  // scrollLeft on its own (e.g. a browser caret-visibility heuristic during
+  // a resize), which used to be mirrored onto the overlay layers via
+  // translateX. Left uncorrected, that stray offset silently mis-positions
+  // checkboxes/search marks with no visible symptom (the invisible textarea
+  // itself shows no scrollbar). Just pin it back to 0 instead.
+  if(input.scrollLeft) input.scrollLeft=0;
 }
 
 /* ---------- clipboard: strip NBSP on copy/cut ---------- */
@@ -1837,7 +1890,8 @@ let lastGutterClick=-1, gutterDrag=false, dragAnchor=-1, dragAdditive=false;
 function gutterLineAt(clientY){
   const r=gutter.getBoundingClientRect();
   const n=model?model.data.lines.length:0;
-  const i=Math.floor((clientY-r.top-14)/24);   // minus padY
+  const y=clientY-r.top-14;   // minus padY
+  const i=rowAtY(y).row;
   return Math.max(0, Math.min(n-1, i));
 }
 function onGutterDown(e){
@@ -1915,6 +1969,7 @@ function showToast(msg){
 function applyResultsWidth(w){
   w=Math.max(90, Math.min(560, w||150));
   document.documentElement.style.setProperty('--results-w', w+'px');
+  computeCharsPerLine();
 }
 function initResultsResize(){
   const rz=$('results-resize'); let dragging=false;
@@ -1924,6 +1979,7 @@ function initResultsResize(){
     const w=editor.getBoundingClientRect().right - cx;
     store.resultsWidth=Math.max(90, Math.min(560, w));
     applyResultsWidth(store.resultsWidth);
+    render();                  // live rewrap as the results column is dragged wider/narrower
     if(e.cancelable) e.preventDefault();
   };
   const stop=()=>{ if(dragging){ dragging=false; rz.classList.remove('dragging'); document.body.style.userSelect=''; persist(); } };
@@ -2050,7 +2106,11 @@ function cloudSave(){
    [BOOT]
    ================================================================ */
 function boot(){
+  const appEl=$('app');
+  if(window.innerWidth<=720) appEl.classList.add('sidebar-hidden');   // collapse by default on small screens, before the first render
+
   measureChar();
+  computeCharsPerLine();
   buildSwatches();
   load();
   initAuth();
@@ -2112,10 +2172,8 @@ function boot(){
     store.tags.splice(+del.dataset.i,1); renderTags(); render(); scheduleSave();
   });
 
-  const appEl=$('app');
-  $('toggle-sidebar').addEventListener('click', ()=>appEl.classList.toggle('sidebar-hidden'));
-  $('backdrop').addEventListener('click', ()=>appEl.classList.add('sidebar-hidden'));
-  if(window.innerWidth<=720) appEl.classList.add('sidebar-hidden');   // collapse by default on small screens
+  $('toggle-sidebar').addEventListener('click', ()=>{ appEl.classList.toggle('sidebar-hidden'); computeCharsPerLine(); render(); });
+  $('backdrop').addEventListener('click', ()=>{ appEl.classList.add('sidebar-hidden'); computeCharsPerLine(); render(); });
 
   // documents
   $('doc-add').addEventListener('click', createDoc);
@@ -2166,7 +2224,7 @@ function boot(){
   // results column resize
   initResultsResize();
 
-  window.addEventListener('resize', ()=>{ measureChar(); render(); });
+  window.addEventListener('resize', ()=>{ measureChar(); computeCharsPerLine(); render(); });
 
   // keep gutter/results scrolled with editor vertical scroll is automatic (flex children)
 }
