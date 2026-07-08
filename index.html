@@ -303,7 +303,7 @@ button{font-family:inherit;color:inherit}
 #input{
   position:absolute;top:0;left:0;width:100%;height:100%;z-index:3;resize:none;overflow:hidden;
   background:transparent;color:transparent;caret-color:var(--accent);
-  outline:none;white-space:pre;
+  outline:none;white-space:pre-wrap;word-break:break-all;
 }
 #input::selection{background:var(--sel)}
 
@@ -1433,10 +1433,13 @@ sum
 
 /* ---------- checkbox transform (++ -> [ ]) & toggle ---------- */
 function transformDoubleplus(){
-  // "++", "хх" or "xx" at the very start OR the very end of the line
-  // immediately become a checkbox, no trailing space required (convenient
-  // on a phone). The same marker sitting in the middle of the line is left
-  // untouched.
+  // "++", "хх" or "xx" at the very start of the line immediately becomes a
+  // checkbox, no trailing space required (convenient on a phone). At the
+  // very end of the line, "++" still works attached to the last word, but
+  // "хх"/"xx" only triggers when it's its own token (preceded by a space) —
+  // otherwise any word that happens to end in "хх" (e.g. Cyrillic text) would
+  // false-trigger. The marker sitting in the middle of the line is always
+  // left untouched.
   const val=input.value;
   const caret=input.selectionStart;
   const lineStart=val.lastIndexOf('\n',caret-1)+1;
@@ -1454,7 +1457,7 @@ function transformDoubleplus(){
     return true;
   }
 
-  const endM=/^(\s*)(\S.*?)(?:\+\+|[хХxX]{2})$/.exec(line);
+  const endM=/^(\s*)(\S.*?)\+\+$/.exec(line) || /^(\s*)(\S.*)\s[хХxX]{2}$/.exec(line);
   if(endM){
     const rebuilt=endM[1]+'[ ] '+endM[2];
     const before=val.slice(0,lineStart), after=val.slice(end);
