@@ -137,13 +137,19 @@ button{font-family:inherit;color:inherit}
 .search-count{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* documents */
-.doc-list{display:flex;flex-direction:column;gap:3px;margin-bottom:9px}
+.docs-panel{
+  background:var(--bg-editor);border:1px solid var(--border-soft);border-radius:10px;
+  padding:11px 11px 8px;
+}
+.docs-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.docs-head .side-title{margin:0}
+.doc-list{display:flex;flex-direction:column;gap:3px}
 .doc-item{
   display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;cursor:pointer;
   border:1px solid transparent;
 }
-.doc-item:hover{background:var(--bg-editor)}
-.doc-item.active{background:var(--bg-editor);border-color:var(--border)}
+.doc-item:hover{background:var(--bg-panel)}
+.doc-item.active{background:var(--bg-panel);border-color:var(--border)}
 .doc-item.active .doc-name{color:var(--text-strong)}
 .doc-item .doc-name{
   flex:1 1 auto;min-width:0;font-size:13px;color:var(--text);
@@ -155,7 +161,7 @@ button{font-family:inherit;color:inherit}
 }
 .doc-item.match .doc-badge{display:inline-block}
 .doc-item.dim{opacity:.4}
-.doc-item .doc-pin{flex:0 0 auto;font-size:10px;opacity:.65;filter:grayscale(.2)}
+.doc-item .doc-pin{flex:0 0 auto;width:5px;height:5px;border-radius:50%;background:var(--dim);opacity:.6}
 .doc-item .doc-del{
   flex:0 0 auto;border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;
   padding:0 2px;opacity:0;transition:opacity .12s;
@@ -163,8 +169,9 @@ button{font-family:inherit;color:inherit}
 .doc-item:hover .doc-del{opacity:1}
 .doc-item .doc-del:hover{color:var(--accent)}
 .doc-add{
-  width:100%;text-align:left;background:none;border:1px dashed var(--border);border-radius:7px;
-  padding:7px 9px;color:var(--dim);cursor:pointer;font-size:12.5px;
+  flex:0 0 auto;width:22px;height:22px;border-radius:6px;border:1px solid var(--border);
+  background:none;color:var(--dim);cursor:pointer;font-size:15px;line-height:1;
+  display:grid;place-items:center;padding:0;
 }
 .doc-add:hover{border-color:var(--accent);color:var(--accent)}
 
@@ -434,8 +441,8 @@ button{font-family:inherit;color:inherit}
   <div id="backdrop"></div>
   <aside id="sidebar">
     <div class="brand">
-      <div class="logo">∑</div>
-      <div class="name">Calcuta<small>текст + математика</small></div>
+      <div class="logo">С</div>
+      <div class="name">Calcuta</div>
       <button id="signout-btn" type="button" title="Выйти из аккаунта">⎋</button>
     </div>
     <div class="search-box">
@@ -444,10 +451,12 @@ button{font-family:inherit;color:inherit}
       <span class="search-count" id="search-count"></span>
     </div>
     <div class="side-scroll">
-      <div class="side-section">
-        <h3 class="side-title">Документы</h3>
+      <div class="side-section docs-panel">
+        <div class="docs-head">
+          <h3 class="side-title">Документы</h3>
+          <button class="doc-add" id="doc-add" title="новый документ">+</button>
+        </div>
         <div class="doc-list" id="doc-list"></div>
-        <button class="doc-add" id="doc-add">+ Новый документ</button>
       </div>
       <div class="side-section">
         <h3 class="side-title">Тэги</h3>
@@ -667,6 +676,7 @@ function evaluate(toks, scope, ctx){
   let p=0;
   const peek=()=>toks[p];
   const next=()=>toks[p++];
+  const EOF={};   // sentinel: input ran out mid-expression (e.g. trailing "25 +")
 
   function val(v,pct){ return {v, pct:!!pct}; }
   function num(node){ return node.pct ? node.v/100 : node.v; }
@@ -676,7 +686,8 @@ function evaluate(toks, scope, ctx){
   function parseAdd(){
     let a=parseMul();
     while(peek() && (peek().t==='+'||peek().t==='-')){
-      const op=next().t; const b=parseMul();
+      const op=next().t;
+      let b; try{ b=parseMul(); }catch(e){ if(e===EOF) return a; throw e; }
       if(b.pct)      a=val(op==='+'? a.v + a.v*b.v/100 : a.v - a.v*b.v/100);
       else if(a.pct) a=val(op==='+'? a.v/100 + b.v    : a.v/100 - b.v);
       else           a=val(op==='+'? a.v + b.v         : a.v - b.v);
@@ -686,7 +697,8 @@ function evaluate(toks, scope, ctx){
   function parseMul(){
     let a=parseUnary();
     while(peek() && (peek().t==='*'||peek().t==='/'||peek().t==='of')){
-      const op=next().t; const b=parseUnary();
+      const op=next().t;
+      let b; try{ b=parseUnary(); }catch(e){ if(e===EOF) return a; throw e; }
       if(op==='of') a=val((a.pct? a.v/100 : a.v) * b.v);
       else if(op==='*') a=val(num(a)*num(b));
       else a=val(num(a)/num(b));
@@ -700,7 +712,11 @@ function evaluate(toks, scope, ctx){
   }
   function parsePow(){
     let a=parsePostfix();
-    if(peek() && peek().t==='^'){ next(); const b=parseUnary(); return val(Math.pow(num(a),num(b))); }
+    if(peek() && peek().t==='^'){
+      next();
+      let b; try{ b=parseUnary(); }catch(e){ if(e===EOF) return a; throw e; }
+      return val(Math.pow(num(a),num(b)));
+    }
     return a;
   }
   function parsePostfix(){
@@ -710,7 +726,7 @@ function evaluate(toks, scope, ctx){
   }
   function parsePrimary(){
     const tk=peek();
-    if(!tk) throw 0;
+    if(!tk) throw EOF;
     if(tk.t==='num'){ next(); return val(tk.v); }
     if(tk.t==='('){ next(); const e=parseExpr(); if(peek()&&peek().t===')') next(); else throw 0; return e; }
     if(tk.t==='var'){ next(); const key=tk.name.toLowerCase();
@@ -1118,10 +1134,6 @@ function render(){
   hotspots.innerHTML=hs;
   results.innerHTML=rs;
 
-  // status
-  const words=text.trim()?text.trim().split(/\s+/).length:0;
-  statusEl.textContent=n+' стр · '+words+' сл';
-
   syncScroll();
   if(searchQuery){ computeMatches(); renderSearch(); }
 }
@@ -1140,7 +1152,10 @@ function scheduleSave(){
 }
 
 function makeTasksDoc(){
-  return { id:uid(), name:'Задачи', protected:true, text:DEFAULT_DOC, lineColors:{} };
+  return { id:uid(), name:'Задачи', protected:'tasks', text:DEFAULT_DOC, lineColors:{} };
+}
+function makePersonalDoc(){
+  return { id:uid(), name:'Личное', protected:'personal', text:'', lineColors:{} };
 }
 function load(){
   let s=null;
@@ -1155,11 +1170,15 @@ function load(){
   }
   store.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; if(!d.id) d.id=uid(); });
   if(!store.tags) store.tags=[];
-  // ensure the stock, undeletable "Задачи" document exists (pinned to top)
-  if(!store.docs.some(d=>d.protected)){
+  // ensure the stock, undeletable documents exist (pinned to top, in order)
+  if(!store.docs.some(d=>d.protected==='tasks')){
     const tasks=makeTasksDoc();
     store.docs.unshift(tasks);
-    if(!store.docs.length || !store.activeId) store.activeId=tasks.id;
+    if(!store.activeId) store.activeId=tasks.id;
+  }
+  if(!store.docs.some(d=>d.protected==='personal')){
+    const idx=store.docs.findIndex(d=>d.protected==='tasks');
+    store.docs.splice(idx+1, 0, makePersonalDoc());
   }
   if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
 
@@ -1183,6 +1202,7 @@ function loadActiveIntoEditor(){
 
 /* ---------- document management ---------- */
 function switchDoc(id){
+  if(window.innerWidth<=720) $('app').classList.add('sidebar-hidden');
   if(id===store.activeId) return;
   persist();                 // save current doc's text first
   store.activeId=id;
@@ -1240,7 +1260,7 @@ function renderDocs(){
       else cls+=' dim';
     }
     const del=d.protected ? '' : '<button class="doc-del" data-id="'+d.id+'" title="удалить документ">×</button>';
-    const pin=d.protected ? '<span class="doc-pin" title="стоковая страница">📌</span>' : '';
+    const pin=d.protected ? '<span class="doc-pin" title="стоковая страница"></span>' : '';
     return '<div class="doc-item'+cls+(d.protected?' protected':'')+'" data-id="'+d.id+'">'
       +'<span class="doc-name">'+esc(d.name||'Без названия')+'</span>'+badge+pin+del+'</div>';
   }).join('');
@@ -1970,9 +1990,11 @@ function onAuthChanged(user){
   if(user){
     $('authgate').style.display='none';
     $('authgate-status').textContent='';
+    statusEl.textContent=user.displayName||user.email||'';
     subscribeCloud();
   }else{
     $('authgate').style.display='flex';
+    statusEl.textContent='';
     if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
   }
 }
