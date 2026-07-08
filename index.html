@@ -1239,10 +1239,17 @@ function render(){
 }
 
 /* ---------- persistence ---------- */
+/* Write to localStorage only, without bumping `updated` — used at boot so
+   merely loading the app (or seeding the stock docs on a device that has
+   never saved anything locally) never looks "newer" than a real cloud save.
+   Only an actual edit should move `updated` forward. */
+function saveLocal(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
+}
 function persist(){
   const d=doc(); if(d){ d.text=input.value; d.updated=Date.now(); }
   store.updated=Date.now();
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
+  saveLocal();
   cloudSave();
 }
 let saveTimer=null;
@@ -1286,7 +1293,7 @@ function load(){
   loadActiveIntoEditor();
   renderTags();
   renderDocs();
-  persist();
+  saveLocal();
 }
 
 /* Load the active document's text into the editor. */
