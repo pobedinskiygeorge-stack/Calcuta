@@ -1433,20 +1433,34 @@ sum
 
 /* ---------- checkbox transform (++ -> [ ]) & toggle ---------- */
 function transformDoubleplus(){
-  // "++", "хх" or "xx" at the line start immediately become a checkbox,
-  // no trailing space required (convenient on a phone).
+  // "++", "хх" or "xx" at the very start OR the very end of the line
+  // immediately become a checkbox, no trailing space required (convenient
+  // on a phone). The same marker sitting in the middle of the line is left
+  // untouched.
   const val=input.value;
   const caret=input.selectionStart;
   const lineStart=val.lastIndexOf('\n',caret-1)+1;
   const lineEnd=val.indexOf('\n',caret); const end=lineEnd===-1?val.length:lineEnd;
   const line=val.slice(lineStart,end);
-  const m=/^(\s*)(?:\+\+|[хХxX]{2})(.*)$/.exec(line);
-  if(m){
-    const rebuilt=m[1]+'[ ] '+m[2];
+
+  const startM=/^(\s*)(?:\+\+|[хХxX]{2})(.*)$/.exec(line);
+  if(startM){
+    const rebuilt=startM[1]+'[ ] '+startM[2];
     const before=val.slice(0,lineStart), after=val.slice(end);
     input.value=before+rebuilt+after;
     const delta=rebuilt.length-line.length;   // 4 - 2 = +2
-    const nc=Math.max(lineStart+m[1].length+4, caret+delta);
+    const nc=Math.max(lineStart+startM[1].length+4, caret+delta);
+    input.setSelectionRange(nc,nc);
+    return true;
+  }
+
+  const endM=/^(\s*)(\S.*?)(?:\+\+|[хХxX]{2})$/.exec(line);
+  if(endM){
+    const rebuilt=endM[1]+'[ ] '+endM[2];
+    const before=val.slice(0,lineStart), after=val.slice(end);
+    input.value=before+rebuilt+after;
+    const delta=rebuilt.length-line.length;
+    const nc=Math.max(lineStart+rebuilt.length, caret+delta);
     input.setSelectionRange(nc,nc);
     return true;
   }
