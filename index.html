@@ -1463,6 +1463,14 @@ function pillRegions(){
   }
   return regs;
 }
+/* A backward delete boundary must never land inside a pill — word/char
+   backspace would otherwise chop it (e.g. wipe its digits but leave the
+   invisible sentinel behind). Snap it forward to the pill's right edge so
+   the pill is only ever removed as one atomic unit, on a later keypress. */
+function clampFromPill(from){
+  for(const [s,e] of pillRegions()){ if(from>s && from<e) return e; }
+  return from;
+}
 function snapCaret(){
   if(input.selectionStart!==input.selectionEnd) return;   // leave selections alone
   let pos=input.selectionStart;
@@ -1524,8 +1532,9 @@ function onEditorKeydown(e){
       // swapped: plain Backspace deletes a word; Ctrl/Alt+Backspace deletes one char
       e.preventDefault();
       const v=input.value;
-      const from=(e.ctrlKey||e.altKey||e.metaKey) ? prevCharStart(v,pos,contentStart)
-                                                  : prevWordStart(v,pos,contentStart);
+      let from=(e.ctrlKey||e.altKey||e.metaKey) ? prevCharStart(v,pos,contentStart)
+                                                : prevWordStart(v,pos,contentStart);
+      from=clampFromPill(from);
       commitValue(v.slice(0,from)+v.slice(pos), from);
       return;
     }
