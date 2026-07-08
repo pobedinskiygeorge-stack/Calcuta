@@ -1950,19 +1950,18 @@ function initAuth(){
   db=firebase.firestore();
   auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
   auth.onAuthStateChanged(onAuthChanged);
-  /* signInWithPopup on firebase-js-sdk v10.x intermittently throws
-     "The requested action is invalid" on re-login after sign-out
-     (github.com/firebase/firebase-js-sdk/issues/7529) — redirect flow
-     sidesteps the popup/COOP handling that triggers it. */
-  auth.getRedirectResult().catch(err=>{ statusEl.textContent='Не удалось войти: ['+err.code+'] '+err.message; });
+  /* signInWithRedirect requires third-party cookies between this site's
+     domain and the *.firebaseapp.com authDomain to relay the result back —
+     Safari 16.1+, Firefox 109+ and Chrome 115+ all block that by default,
+     so the redirect silently drops the user back at the sign-in screen
+     with no error (firebase.google.com/docs/auth/web/redirect-best-practices).
+     signInWithPopup avoids the cross-domain cookie dependency entirely. */
   btn.addEventListener('click', ()=>{
     statusEl.textContent='Открываем окно входа Google…';
     btn.disabled=true;
-    auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider())
-      .catch(err=>{
-        statusEl.textContent='Не удалось войти: ['+err.code+'] '+err.message;
-        btn.disabled=false;
-      });
+    auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
+      .catch(err=>{ statusEl.textContent='Не удалось войти: ['+err.code+'] '+err.message; })
+      .finally(()=>{ btn.disabled=false; });
   });
   $('signout-btn').addEventListener('click', ()=>auth.signOut());
 }
