@@ -2226,6 +2226,14 @@ function boot(){
 
   $('toggle-sidebar').addEventListener('click', ()=>{ appEl.classList.toggle('sidebar-hidden'); computeCharsPerLine(); render(); });
   $('backdrop').addEventListener('click', ()=>{ appEl.classList.add('sidebar-hidden'); computeCharsPerLine(); render(); });
+  // The sidebar's width change is CSS-animated (margin-left transition), so
+  // reading stack.clientWidth synchronously on click still reports the
+  // pre-toggle layout. Recompute once the animation has actually settled,
+  // otherwise charsPerLine (and every row/pill position derived from it)
+  // stays locked to a stale width and never returns to place.
+  $('sidebar').addEventListener('transitionend', e=>{
+    if(e.propertyName==='margin-left'){ computeCharsPerLine(); render(); }
+  });
 
   // documents
   $('doc-add').addEventListener('click', createDoc);
