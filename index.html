@@ -1046,7 +1046,7 @@ const input=$('input'), highlight=$('highlight'),
 const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text, name and
    line-number colors live per document. */
-let store={ docs:[], activeId:null, tags:[] };
+let store={ docs:[], activeId:null, tags:[], tagsUpdated:0, deletedDocs:{} };
 function doc(){ return store.docs.find(d=>d.id===store.activeId) || store.docs[0]; }
 function uid(){ return 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 let model=null;            // last analyze() + per-line meta
@@ -1247,7 +1247,12 @@ function saveLocal(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
 }
 function persist(){
-  const d=doc(); if(d){ d.text=input.value; d.updated=Date.now(); }
+  // Only move a doc's `updated` forward when its TEXT actually changed — so
+  // navigation (switch/create/delete all call persist()) can't spuriously
+  // bump an untouched doc and let its stale copy out-compete a newer edit made
+  // to the same doc on another device. Real edits already bumped `updated` in
+  // onChange(); by the time this debounced save runs, text===value → no re-bump.
+  const d=doc(); if(d && d.text!==input.value){ d.text=input.value; d.updated=Date.now(); }
   store.updated=Date.now();
   saveLocal();
   cloudSave();
@@ -1258,11 +1263,26 @@ function scheduleSave(){
   saveTimer=setTimeout(persist,300);
 }
 
+/* Stock docs use FIXED ids keyed to their role (not a random uid) so that the
+   "Задачи"/"Личное" doc seeded independently on two devices is recognized as
+   the SAME document by the per-id merge and reconciled — instead of both
+   copies surviving as duplicates. They're also seeded with updated:0 so a REAL
+   copy of the same doc from the cloud (any timestamp > 0) always wins the
+   merge — a freshly-seeded device can never clobber real data. */
+const TASKS_ID='stock-tasks', PERSONAL_ID='stock-personal';
 function makeTasksDoc(){
-  return { id:uid(), name:'Задачи', protected:'tasks', text:DEFAULT_DOC, lineColors:{} };
+  return { id:TASKS_ID, name:'Задачи', protected:'tasks', text:DEFAULT_DOC, lineColors:{}, updated:0 };
 }
 function makePersonalDoc(){
-  return { id:uid(), name:'Личное', protected:'personal', text:'', lineColors:{} };
+  return { id:PERSONAL_ID, name:'Личное', protected:'personal', text:'', lineColors:{}, updated:0 };
+}
+/* Force any protected doc onto its canonical id, so stock docs that were
+   created before fixed ids existed (random uid) still merge as one across
+   devices. Returns the id it should be keyed under. */
+function canonicalDocId(d){
+  if(d.protected==='tasks') return TASKS_ID;
+  if(d.protected==='personal') return PERSONAL_ID;
+  return d.id;
 }
 function load(){
   let s=null;
@@ -1275,8 +1295,19 @@ function load(){
     store={ docs:[], activeId:null, tags:(old&&old.tags)||[] };
     if(old && old.text) store.docs.push({id:uid(), name:'Черновик', text:old.text, lineColors:old.lineColors||{}});
   }
-  store.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; if(!d.id) d.id=uid(); });
+  // schema normalization / migration for the merge-based sync fields
+  store.docs.forEach(d=>{
+    if(!d.lineColors) d.lineColors={};
+    if(!d.id) d.id=uid();
+    const cid=canonicalDocId(d);
+    if(cid!==d.id){ if(store.activeId===d.id) store.activeId=cid; d.id=cid; }   // pin protected docs to their fixed id
+    // pre-sync docs had no per-doc timestamp: seed from the store-level one
+    // (a real prior save time) so they read as real data, not stock.
+    if(typeof d.updated!=='number') d.updated = (typeof store.updated==='number' ? store.updated : 0);
+  });
   if(!store.tags) store.tags=[];
+  if(typeof store.tagsUpdated!=='number') store.tagsUpdated=0;
+  if(!store.deletedDocs || typeof store.deletedDocs!=='object') store.deletedDocs={};
   // ensure the stock, undeletable documents exist (pinned to top, in order)
   if(!store.docs.some(d=>d.protected==='tasks')){
     const tasks=makeTasksDoc();
@@ -1323,7 +1354,7 @@ function switchDoc(id){
 function createDoc(){
   persist();
   const n=store.docs.length+1;
-  const d={ id:uid(), name:'Документ '+n, text:'', lineColors:{} };
+  const d={ id:uid(), name:'Документ '+n, text:'', lineColors:{}, updated:Date.now() };
   store.docs.push(d);
   store.activeId=d.id;
   loadActiveIntoEditor();
@@ -1343,6 +1374,9 @@ function deleteDoc(id){
   if(idx<0 || store.docs[idx].protected) return;
   const wasActive=(store.activeId===id);
   store.docs.splice(idx,1);
+  // tombstone so the deletion propagates to other devices instead of the doc
+  // being resurrected by the next merge from a device that still has it.
+  store.deletedDocs[id]=Date.now();
   if(wasActive){ store.activeId=store.docs[Math.max(0,idx-1)].id; loadActiveIntoEditor(); }
   renderDocs();
   persist();
@@ -1619,7 +1653,16 @@ function onInput(){
   applyMask();
   onChange();
 }
-function onChange(){ render(); scheduleSave(); }
+function onChange(){
+  // Keep the active doc's text in sync with the editor SYNCHRONOUSLY on every
+  // change (not only in the debounced persist()) so store is never stale
+  // relative to what's on screen. Otherwise a cloud snapshot arriving in the
+  // gap between a keystroke and its save would merge against old text and
+  // could drop the just-typed edit. `updated` moves forward too, so the local
+  // edit always wins the per-doc merge.
+  const d=doc(); if(d){ d.text=input.value; d.updated=Date.now(); }
+  render(); scheduleSave();
+}
 
 /* Replace the whole document, keeping indent, mask and caret consistent. */
 function commitValue(newText, caret){
@@ -1797,6 +1840,7 @@ function addTag(){
   const color=$('tag-color').value;
   if(!name) return;
   if(!store.tags.some(t=>t.label.toLowerCase()===name.toLowerCase())) store.tags.push({label:name,color});
+  store.tagsUpdated=Date.now();
   $('tag-name').value='';
   renderTags(); render(); scheduleSave();
 }
@@ -2176,6 +2220,7 @@ function onAuthChanged(user){
   }else{
     $('authgate').style.display='flex';
     statusEl.textContent='';
+    cloudReady=false; cloudRef=null;
     if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
   }
 }
@@ -2185,47 +2230,160 @@ function syncError(err){
   btn.title=err ? 'Ошибка синхронизации: ['+err.code+'] '+err.message : 'Выйти из аккаунта';
   if(err) console.error('cloud sync error', err);
 }
-/* Pull the cloud copy once on sign-in (adopt it if newer than what we have
-   locally), then keep listening for changes made from other devices. */
+/* ================================================================
+   [SYNC] Merge-based cloud sync.
+
+   The cloud doc holds the whole store as JSON. Rather than whole-store
+   last-write-wins (which loses edits made on another device, is defeated by
+   client-clock skew, and lets a freshly-seeded device's stock docs clobber
+   real data), we MERGE PER DOCUMENT by each doc's own `updated` timestamp,
+   with tombstones for deletions. Seeded stock docs carry updated:0 so a real
+   cloud copy of the same doc always wins. The merge is deterministic and
+   commutative, so every device converges to the same result. activeId and
+   resultsWidth stay device-local (which doc you're viewing / how wide your
+   results column is shouldn't jump around between devices).
+   ================================================================ */
+let cloudRef=null, cloudReady=false, cloudSaveTimer=null;
+
+/* Canonical doc order: stock docs pinned first, then others by id (uid()
+   encodes creation time), so all devices order identically → convergence. */
+function orderDocs(docs){
+  const rank=d=> d.protected==='tasks'?0 : d.protected==='personal'?1 : 2;
+  return docs.slice().sort((a,b)=>{
+    const ra=rank(a), rb=rank(b);
+    if(ra!==rb) return ra-rb;
+    return a.id<b.id?-1:(a.id>b.id?1:0);
+  });
+}
+function docSig(d){ return JSON.stringify({n:d.name||'',t:d.text||'',c:d.lineColors||{}}); }
+
+/* Deterministic, commutative per-document merge of two stores. */
+function mergeStores(local, remote){
+  local=local||{}; remote=remote||{};
+  const tomb={};
+  const addTomb=m=>{ if(m&&typeof m==='object') for(const id in m) tomb[id]=Math.max(tomb[id]||0, m[id]||0); };
+  addTomb(local.deletedDocs); addTomb(remote.deletedDocs);
+
+  const byId=new Map();
+  const consider=d=>{
+    if(!d||!d.id) return;
+    const ex=byId.get(d.id);
+    if(!ex){ byId.set(d.id,d); return; }
+    const du=d.updated||0, eu=ex.updated||0;
+    // higher timestamp wins; on an exact tie, break by content so the choice
+    // is independent of argument order (keeps the merge commutative).
+    if(du>eu || (du===eu && docSig(d)>docSig(ex))) byId.set(d.id,d);
+  };
+  (local.docs||[]).forEach(consider);
+  (remote.docs||[]).forEach(consider);
+
+  const docs=[];
+  for(const [id,d] of byId){
+    if(!d.protected && (tomb[id]||0) >= (d.updated||0)) continue;   // deletion wins
+    docs.push(d);
+  }
+  // prune tombstones that no longer suppress anything (doc re-created/edited
+  // after the delete, or a protected doc that can't really be deleted).
+  for(const id in tomb){
+    const d=byId.get(id);
+    if(d && (d.protected || (d.updated||0) > tomb[id])) delete tomb[id];
+  }
+
+  const remoteTagsNewer=(remote.tagsUpdated||0) > (local.tagsUpdated||0);
+  const merged={
+    docs: orderDocs(docs),
+    deletedDocs: tomb,
+    tags: (remoteTagsNewer ? remote.tags : local.tags) || [],
+    tagsUpdated: Math.max(local.tagsUpdated||0, remote.tagsUpdated||0),
+  };
+  merged.updated=Date.now();
+  return merged;
+}
+
+/* Canonical serialization of just the fields that should sync (device-local
+   prefs excluded) so we can tell whether a merge actually changed anything
+   versus the cloud — used to avoid pointless re-upload ping-pong. */
+function syncPayload(s){
+  const lc=o=>{ const r={}; Object.keys(o||{}).sort().forEach(k=>r[k]=o[k]); return r; };
+  const docs=(s.docs||[]).slice().sort((a,b)=>a.id<b.id?-1:1)
+    .map(d=>({id:d.id,name:d.name||'',text:d.text||'',lineColors:lc(d.lineColors),protected:d.protected||null,updated:d.updated||0}));
+  const tomb={}; Object.keys(s.deletedDocs||{}).sort().forEach(k=>tomb[k]=s.deletedDocs[k]);
+  return JSON.stringify({docs, deletedDocs:tomb, tags:s.tags||[], tagsUpdated:s.tagsUpdated||0});
+}
+
+function parseRemote(raw){
+  if(!raw||!raw.data) return null;
+  let s; try{ s=JSON.parse(raw.data); }catch(e){ return null; }
+  if(!s||!Array.isArray(s.docs)) return null;
+  s.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; if(!d.id) d.id=uid(); d.id=canonicalDocId(d); if(typeof d.updated!=='number') d.updated=0; });
+  if(!s.tags) s.tags=[];
+  if(typeof s.tagsUpdated!=='number') s.tagsUpdated=0;
+  if(!s.deletedDocs || typeof s.deletedDocs!=='object') s.deletedDocs={};
+  return s;
+}
+
+/* Adopt a merged store into the app without yanking text the user is actively
+   editing. Device-local view prefs are preserved from the current session. */
+function adoptMerged(merged){
+  merged.activeId=store.activeId;
+  merged.resultsWidth=store.resultsWidth;
+  merged.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; });
+  if(!merged.tags) merged.tags=[];
+  if(!merged.docs.length) merged.docs.push(makeTasksDoc());          // never end up doc-less
+  if(!merged.docs.some(d=>d.id===merged.activeId)) merged.activeId=merged.docs[0].id;
+
+  const editing=(document.activeElement===input);
+  if(editing){
+    // keep the in-editor text/edit-time for the doc under the cursor; other
+    // docs and metadata still update live. The user's next save re-uploads it.
+    const cur=store.docs.find(d=>d.id===merged.activeId);
+    const inc=merged.docs.find(d=>d.id===merged.activeId);
+    if(cur && inc){ inc.text=input.value; inc.updated=cur.updated; }
+  }
+
+  store=merged;
+  saveLocal();
+  applyResultsWidth(store.resultsWidth);
+  renderTags(); renderDocs();
+  if(editing) render(); else loadActiveIntoEditor();
+}
+
+/* Listen to the cloud doc. The FIRST snapshot reconciles this device with the
+   cloud (merge, adopt, and push back anything the cloud was missing); later
+   snapshots are live updates from other devices. cloudReady gates uploads so
+   a save can never race ahead of that first reconciliation and clobber the
+   cloud with un-merged local (e.g. freshly-seeded) content. */
 function subscribeCloud(){
   if(!db||!currentUser) return;
-  const ref=db.collection('users').doc(currentUser.uid);
-  ref.get().then(snap=>{
-    if(snap.exists) applyRemoteIfNewer(snap.data());
-    else ref.set({ data: JSON.stringify(store), updated: store.updated||Date.now() });
-    if(cloudUnsub) cloudUnsub();
-    cloudUnsub=ref.onSnapshot(snap=>{
-      if(!snap.exists || snap.metadata.hasPendingWrites) return;   // ignore our own writes
-      applyRemoteIfNewer(snap.data());
-    }, syncError);
-  }).catch(syncError);
+  cloudReady=false;
+  cloudRef=db.collection('users').doc(currentUser.uid);
+  let first=true;
+  if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
+  cloudUnsub=cloudRef.onSnapshot(snap=>{
+    if(snap.metadata.hasPendingWrites) return;      // our own optimistic write echoing back
+    if(!snap.exists){
+      if(first){ first=false; cloudReady=true; pushCloud(); }   // first device ever: seed the cloud
+      return;
+    }
+    const remote=parseRemote(snap.data());
+    if(!remote){ if(first){ first=false; cloudReady=true; } return; }
+    const merged=mergeStores(store, remote);
+    adoptMerged(merged);
+    const diverged = syncPayload(merged)!==syncPayload(remote);
+    if(first){ first=false; cloudReady=true; }
+    if(diverged) pushCloud();                        // cloud was missing some of our data → push merge
+  }, syncError);
 }
-/* Adopt an incoming cloud store only if it's actually newer, and never while
-   the user is actively typing (would yank text out from under them). */
-function applyRemoteIfNewer(remote){
-  if(!remote || !remote.data) return;
-  let incoming; try{ incoming=JSON.parse(remote.data); }catch(e){ return; }
-  if(!incoming || !Array.isArray(incoming.docs)) return;
-  if((remote.updated||0) <= (store.updated||0)) return;
-  if(document.activeElement===input) return;
-  store=incoming;
-  store.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; if(!d.id) d.id=uid(); });
-  if(!store.tags) store.tags=[];
-  if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
-  applyResultsWidth(store.resultsWidth);
-  loadActiveIntoEditor(); renderTags(); renderDocs(); render();
-}
-let cloudSaveTimer=null;
-function cloudSave(){
-  if(!db||!currentUser) return;
+
+function pushCloud(){
+  if(!db||!currentUser||!cloudRef||!cloudReady) return;
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer=setTimeout(()=>{
-    db.collection('users').doc(currentUser.uid)
-      .set({ data: JSON.stringify(store), updated: store.updated })
+    cloudRef.set({ data: JSON.stringify(store), updated: Date.now() })
       .then(()=>syncError(null)).catch(syncError);
-  }, 400);
+  }, 500);
 }
+function cloudSave(){ if(cloudReady) pushCloud(); }
 
 /* ================================================================
    [BOOT]
@@ -2294,7 +2452,7 @@ function boot(){
   $('tag-name').addEventListener('keydown', e=>{ if(e.key==='Enter') addTag(); });
   $('tag-list').addEventListener('click', e=>{
     const del=e.target.closest('.del'); if(!del) return;
-    store.tags.splice(+del.dataset.i,1); renderTags(); render(); scheduleSave();
+    store.tags.splice(+del.dataset.i,1); store.tagsUpdated=Date.now(); renderTags(); render(); scheduleSave();
   });
 
   $('toggle-sidebar').addEventListener('click', ()=>{ appEl.classList.toggle('sidebar-hidden'); computeCharsPerLine(); render(); });
@@ -2365,7 +2523,9 @@ function boot(){
 document.addEventListener('DOMContentLoaded', boot);
 
 /* expose a tiny hook for automated testing */
-window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, tokenizeMath, normalizePasted, dateAt};
+window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, tokenizeMath, normalizePasted, dateAt,
+  getStore:()=>store, mergeStores, syncPayload,
+  createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
 
 })();
 </script>
