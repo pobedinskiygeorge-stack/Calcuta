@@ -1547,6 +1547,24 @@ function lineBounds(pos){
   const indentLen=(v.slice(lineStart,lineEnd).match(/^[ \t]*/)[0]).length;
   return {lineStart, indentLen, contentStart:lineStart+indentLen, lineEnd};
 }
+/* Task lines ([ ]/[x]) are protected from being erased by typing/deleting —
+   the checkbox click (mark done) or an explicit delete (right-click menu /
+   swipe) are the only ways to remove one. */
+function isCheckboxLineAt(pos){
+  const v=input.value;
+  const {lineStart,lineEnd}=lineBounds(pos);
+  return classify(v.slice(lineStart,lineEnd)).kind==='checkbox';
+}
+function rangeTouchesCheckboxLine(start,end){
+  const v=input.value;
+  let pos=Math.min(start,end); const last=Math.max(start,end);
+  while(true){
+    if(isCheckboxLineAt(pos)) return true;
+    const {lineEnd}=lineBounds(pos);
+    if(lineEnd>=last) return false;
+    pos=lineEnd+1;
+  }
+}
 /* Result pills are atomic entities: [SENT + optional minus + number]. */
 function pillRegions(){
   const v=input.value; const regs=[]; let i=0;
@@ -1609,8 +1627,8 @@ function onEditorKeydown(e){
       if(pos>s && pos<en){ e.preventDefault(); const edge=(pos-s<=en-pos)?s:en; input.setSelectionRange(edge,edge); return; }
       if(e.key==='ArrowRight' && pos===s){ e.preventDefault(); input.setSelectionRange(en,en); return; }
       if(e.key==='ArrowLeft'  && pos===en){ e.preventDefault(); input.setSelectionRange(s,s); return; }
-      if(e.key==='Backspace'  && pos===en){ e.preventDefault(); const v=input.value; commitValue(v.slice(0,s)+v.slice(en), s); return; }
-      if(e.key==='Delete'     && pos===s){ e.preventDefault(); const v=input.value; commitValue(v.slice(0,s)+v.slice(en), s); return; }
+      if(e.key==='Backspace'  && pos===en){ e.preventDefault(); if(isCheckboxLineAt(pos)) return; const v=input.value; commitValue(v.slice(0,s)+v.slice(en), s); return; }
+      if(e.key==='Delete'     && pos===s){ e.preventDefault(); if(isCheckboxLineAt(pos)) return; const v=input.value; commitValue(v.slice(0,s)+v.slice(en), s); return; }
     }
   }
 
@@ -1618,19 +1636,29 @@ function onEditorKeydown(e){
     const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos);
     if(pos<=contentStart && lineStart>0){          // at (visual) line start → merge up
       e.preventDefault();
+      if(isCheckboxLineAt(pos)) return;   // don't erase this task's marker by merging it into the line above
       const v=input.value;
       commitValue(v.slice(0,lineStart-1)+v.slice(contentStart), lineStart-1);
       return;
     }
     if(pos>contentStart){
-      // standard keyboard behavior: plain Backspace deletes one char; Ctrl/Alt+Backspace deletes a word
       e.preventDefault();
+      if(isCheckboxLineAt(pos)) return;   // task lines: only the checkbox click / right-click delete / swipe remove content
+      // standard keyboard behavior: plain Backspace deletes one char; Ctrl/Alt+Backspace deletes a word
       const v=input.value;
       let from=(e.ctrlKey||e.altKey||e.metaKey) ? prevWordStart(v,pos,contentStart)
                                                 : prevCharStart(v,pos,contentStart);
       from=clampFromPill(from);
       commitValue(v.slice(0,from)+v.slice(pos), from);
       return;
+    }
+  }
+  if(e.key==='Delete' && !e.shiftKey && collapsed){
+    const pos=input.selectionStart, {lineEnd}=lineBounds(pos);
+    // forward-delete within a task line, or merging the NEXT line up into this
+    // one when that next line is a task — both would erase task content.
+    if(isCheckboxLineAt(pos) || (pos===lineEnd && lineEnd<input.value.length && isCheckboxLineAt(lineEnd+1))){
+      e.preventDefault(); return;
     }
   }
   if(e.key==='ArrowLeft' && !e.shiftKey && collapsed){
@@ -1654,6 +1682,15 @@ function pushHistory(st){
 }
 function onBeforeInput(e){
   if(suppressHistory) return;
+  // Task lines are protected from being erased: block any selection-based
+  // delete/replace (cut, typed-over selection, paste/drop-over selection)
+  // that overlaps one. Backspace/Delete with a collapsed caret are already
+  // guarded in onEditorKeydown; this catches the remaining paths.
+  const s=input.selectionStart, en=input.selectionEnd;
+  const type=e.inputType||'';
+  if(s!==en && (type.startsWith('delete')||type.startsWith('insert')) && rangeTouchesCheckboxLine(s,en)){
+    e.preventDefault(); return;
+  }
   const boundary = !undoTimer || (e.inputType && e.inputType!==lastInputType);
   if(boundary) pushHistory(histState());          // snapshot pre-change state at burst boundaries
   lastInputType=e.inputType||'';
@@ -1853,6 +1890,7 @@ function stripOnCopy(e){
     e.clipboardData.setData('text/plain',txt);
     e.preventDefault();
     if(e.type==='cut'){
+      if(rangeTouchesCheckboxLine(s,en)) return;   // task lines: cutting is a form of erasing, block it
       ta.value=ta.value.slice(0,s)+ta.value.slice(en);
       ta.setSelectionRange(s,s); onChange();
     }
