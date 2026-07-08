@@ -6,10 +6,15 @@
 <title>Calcuta — редактор с математикой</title>
 </head>
 <body>
+<!-- Firebase (Google sign-in + Firestore sync) — loaded with `defer` so it
+     never blocks first paint; ready by DOMContentLoaded, when boot() wires it up. -->
+<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <!-- ============================================================
      Calcuta — a code-editor-styled text editor with a live math
      engine, inspired by numbr.dev. Single self-contained file.
-     Sections: [STYLE] · [MARKUP] · [ENGINE] · [EDITOR] · [BOOT]
+     Sections: [STYLE] · [MARKUP] · [ENGINE] · [EDITOR] · [SYNC] · [BOOT]
      ============================================================ -->
 
 <style>
@@ -391,15 +396,47 @@ button{font-family:inherit;color:inherit}
 /* keep the toggle above the overlay everywhere */
 #toggle-sidebar{position:relative;z-index:41;flex:0 0 auto}
 .title-input{flex:1 1 auto;min-width:60px}
+
+/* ---------- auth gate (Google sign-in, shown before the app is usable) ---------- */
+#authgate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  background:var(--bg);}
+.authgate-card{width:min(340px,86vw);text-align:center;padding:36px 28px;border:1px solid var(--border);
+  border-radius:14px;background:var(--bg-panel);}
+.authgate-logo{width:44px;height:44px;margin:0 auto 14px;border-radius:10px;background:var(--accent-soft);
+  color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:600}
+.authgate-title{font-size:17px;font-weight:600;color:var(--text-strong)}
+.authgate-sub{margin-top:6px;font-size:12.5px;color:var(--dim);line-height:1.5}
+.authgate-btn{margin-top:22px;width:100%;display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:#fff;color:#1f1f1f;
+  font-size:13.5px;font-weight:500;cursor:pointer;transition:filter .12s}
+.authgate-btn:hover{filter:brightness(.95)}
+.authgate-btn:disabled{opacity:.5;cursor:default}
+.authgate-status{margin-top:14px;min-height:16px;font-size:11.5px;color:var(--dim)}
+#signout-btn{flex:0 0 auto;margin-left:auto;background:none;border:none;cursor:pointer;
+  font-size:14px;line-height:1;padding:5px 7px;border-radius:6px;color:var(--dim);opacity:.75}
+#signout-btn:hover{opacity:1;color:var(--text);background:var(--row-hover)}
 </style>
 
 <!-- ================= MARKUP ================= -->
+<div id="authgate">
+  <div class="authgate-card">
+    <div class="authgate-logo">∑</div>
+    <div class="authgate-title">Calcuta</div>
+    <div class="authgate-sub">Войдите через Google, чтобы документы синхронизировались между всеми вашими устройствами</div>
+    <button id="google-signin" class="authgate-btn" type="button">
+      <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 01-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.26c-.81.54-1.84.87-3.05.87-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 009 18z"/><path fill="#FBBC05" d="M3.96 10.72A5.4 5.4 0 013.68 9c0-.6.1-1.18.28-1.72V4.95H.96A9 9 0 000 9c0 1.45.35 2.83.96 4.05l3-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 00.96 4.95l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/></svg>
+      Войти через Google
+    </button>
+    <div class="authgate-status" id="authgate-status"></div>
+  </div>
+</div>
 <div id="app">
   <div id="backdrop"></div>
   <aside id="sidebar">
     <div class="brand">
       <div class="logo">∑</div>
       <div class="name">Calcuta<small>текст + математика</small></div>
+      <button id="signout-btn" type="button" title="Выйти из аккаунта">⎋</button>
     </div>
     <div class="search-box">
       <svg class="search-ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M10 4a6 6 0 014.47 10l4.26 4.26-1.42 1.42L13.04 15.4A6 6 0 1110 4zm0 2a4 4 0 100 8 4 4 0 000-8z"/></svg>
@@ -1092,7 +1129,9 @@ function render(){
 /* ---------- persistence ---------- */
 function persist(){
   const d=doc(); if(d){ d.text=input.value; d.updated=Date.now(); }
+  store.updated=Date.now();
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
+  cloudSave();
 }
 let saveTimer=null;
 function scheduleSave(){
@@ -1877,12 +1916,109 @@ function initResultsResize(){
 }
 
 /* ================================================================
+   [SYNC] Google sign-in (Firebase Auth) + cross-device sync (Firestore)
+   ================================================================
+   Fill this in with your own project's config (Firebase console →
+   Project settings → General → Your apps → SDK setup and config).
+   apiKey etc. are not secrets — safe to ship in client code. */
+const firebaseConfig = {
+  apiKey: "ЗАМЕНИТЕ_НА_СВОЙ_apiKey",
+  authDomain: "ЗАМЕНИТЕ_НА_СВОЙ.firebaseapp.com",
+  projectId: "ЗАМЕНИТЕ_НА_СВОЙ",
+  storageBucket: "ЗАМЕНИТЕ_НА_СВОЙ.appspot.com",
+  messagingSenderId: "ЗАМЕНИТЕ_НА_СВОЙ",
+  appId: "ЗАМЕНИТЕ_НА_СВОЙ"
+};
+function firebaseIsConfigured(){ return !!(firebaseConfig.apiKey && !firebaseConfig.apiKey.includes('ЗАМЕНИТЕ')); }
+
+let auth=null, db=null, currentUser=null, cloudUnsub=null;
+
+function initAuth(){
+  const statusEl=$('authgate-status'), btn=$('google-signin');
+  if(typeof firebase==='undefined'){
+    statusEl.textContent='Не удалось загрузить Firebase (нет сети?)';
+    btn.disabled=true;
+    return;
+  }
+  if(!firebaseIsConfigured()){
+    statusEl.textContent='Firebase ещё не настроен — см. инструкцию в README.';
+    btn.disabled=true;
+    return;
+  }
+  firebase.initializeApp(firebaseConfig);
+  auth=firebase.auth();
+  db=firebase.firestore();
+  auth.onAuthStateChanged(onAuthChanged);
+  btn.addEventListener('click', ()=>{
+    statusEl.textContent='Открываем окно входа Google…';
+    btn.disabled=true;
+    auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
+      .catch(err=>{ statusEl.textContent='Не удалось войти: '+err.message; })
+      .finally(()=>{ btn.disabled=false; });
+  });
+  $('signout-btn').addEventListener('click', ()=>auth.signOut());
+}
+function onAuthChanged(user){
+  currentUser=user;
+  if(user){
+    $('authgate').style.display='none';
+    $('authgate-status').textContent='';
+    subscribeCloud();
+  }else{
+    $('authgate').style.display='flex';
+    if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
+  }
+}
+
+/* Pull the cloud copy once on sign-in (adopt it if newer than what we have
+   locally), then keep listening for changes made from other devices. */
+function subscribeCloud(){
+  if(!db||!currentUser) return;
+  const ref=db.collection('users').doc(currentUser.uid);
+  ref.get().then(snap=>{
+    if(snap.exists) applyRemoteIfNewer(snap.data());
+    else ref.set({ data: JSON.stringify(store), updated: store.updated||Date.now() });
+    if(cloudUnsub) cloudUnsub();
+    cloudUnsub=ref.onSnapshot(snap=>{
+      if(!snap.exists || snap.metadata.hasPendingWrites) return;   // ignore our own writes
+      applyRemoteIfNewer(snap.data());
+    });
+  }).catch(()=>{});
+}
+/* Adopt an incoming cloud store only if it's actually newer, and never while
+   the user is actively typing (would yank text out from under them). */
+function applyRemoteIfNewer(remote){
+  if(!remote || !remote.data) return;
+  let incoming; try{ incoming=JSON.parse(remote.data); }catch(e){ return; }
+  if(!incoming || !Array.isArray(incoming.docs)) return;
+  if((remote.updated||0) <= (store.updated||0)) return;
+  if(document.activeElement===input) return;
+  store=incoming;
+  store.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; if(!d.id) d.id=uid(); });
+  if(!store.tags) store.tags=[];
+  if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
+  applyResultsWidth(store.resultsWidth);
+  loadActiveIntoEditor(); renderTags(); renderDocs(); render();
+}
+let cloudSaveTimer=null;
+function cloudSave(){
+  if(!db||!currentUser) return;
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer=setTimeout(()=>{
+    db.collection('users').doc(currentUser.uid)
+      .set({ data: JSON.stringify(store), updated: store.updated }).catch(()=>{});
+  }, 400);
+}
+
+/* ================================================================
    [BOOT]
    ================================================================ */
 function boot(){
   measureChar();
   buildSwatches();
   load();
+  initAuth();
 
   input.addEventListener('beforeinput', onBeforeInput);
   input.addEventListener('input', onInput);

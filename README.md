@@ -53,3 +53,36 @@ sum
 ## Разработка / тесты
 
 Логика движка вынесена в `window.__calcuta` (`analyze`, `evaluate`, `fmt`, `regroupText`, …), что позволяет юнит-тестировать её из headless-браузера без UI.
+
+## Деплой на GitHub Pages
+
+Workflow `.github/workflows/deploy-pages.yml` уже в репозитории и публикует `index.html` при каждом пуше в `claude/math-text-editor-4gmzl2`. Нужно один раз включить сам Pages (это делает только владелец репозитория через UI, API-доступа для этого нет):
+
+1. Repo → **Settings → Pages**.
+2. **Build and deployment → Source** → выбрать **GitHub Actions**.
+3. Сделать любой пуш (или запустить workflow вручную во вкладке Actions) — сайт появится по адресу вида `https://<username>.github.io/<repo>/`.
+
+## Вход через Google и синхронизация между устройствами
+
+Экран входа и синхронизация документов реализованы через Firebase (Authentication + Firestore) — секция `[SYNC]` в `index.html`, сразу перед `[BOOT]`. Пока `firebaseConfig` не заполнен настоящими значениями, приложение показывает окно входа с сообщением «Firebase ещё не настроен» и кнопка входа неактивна — сама заметка/редактор при этом недоступны, ровно как задумано.
+
+Чтобы включить:
+
+1. **console.firebase.google.com** → создать проект (бесплатного тарифа Spark достаточно).
+2. **Authentication → Sign-in method** → включить провайдера **Google**.
+3. **Firestore Database** → создать базу (любой регион, «production mode»), затем во вкладке **Rules** вставить:
+   ```
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /users/{uid} {
+         allow read, write: if request.auth != null && request.auth.uid == uid;
+       }
+     }
+   }
+   ```
+4. **Project settings → General → Your apps** → добавить веб-приложение, скопировать объект `firebaseConfig`.
+5. Вставить эти значения в `firebaseConfig` в `index.html` (секция `[SYNC]`), заменив плейсхолдеры `ЗАМЕНИТЕ_НА_СВОЙ…`. Значения не секретные — их можно спокойно коммитить.
+6. **Authentication → Settings → Authorized domains** → добавить домен, на котором развёрнут сайт (например `<username>.github.io`), иначе вход через Google будет отклонён.
+
+После этого документы хранятся в Firestore под `users/{uid}` (весь `store` — одним JSON-полем) и синхронизируются между устройствами: при входе подтягивается облачная копия (если она новее локальной), а дальше любые правки debounced-сохраняются в облако и долетают на другие открытые вкладки/устройства через `onSnapshot` (кроме случаев, когда там прямо сейчас печатают — чтобы не выдёргивать текст из-под курсора).
