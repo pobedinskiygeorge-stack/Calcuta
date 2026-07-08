@@ -554,6 +554,7 @@ const OSP  = ' ';      // U+00A0 no-break space — visual padding around opera
 function isFmtWS(ch){ return ch===NBSP || ch===OSP; }
 const SENT = '\u2063';     // invisible marker: a copied result → inline pill
 function isCore(ch){ return !isFmtWS(ch) && ch!==SENT; }
+const TAG_SPOTLIGHT_ALPHA = 0.18;   // whole-line tint strength for an active "/tag" spotlight
 
 /* Group the integer part every 3 digits with NBSP. */
 function groupDigits(intStr){
@@ -627,6 +628,9 @@ function tokenizeMath(text, vars){
     // date -> skip (treated as context for math)
     const dm = dateAt(text.slice(i));
     if(dm){ i+=dm[0].length; continue; }
+    // "/tagname" spotlight trigger -> skip entirely, never a division op
+    const tl = tagTriggerLenAt(text, i);
+    if(tl){ i+=tl; continue; }
     // number
     const nm = text.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
     if(nm && /\d/.test(nm[0])){ toks.push({t:'num',v:parseNum(nm[0])}); i+=nm[0].length; continue; }
@@ -668,6 +672,32 @@ function matchVarAt(text, i, varNames){
     }
   }
   return null;
+}
+
+/* Match a "/tagname" spotlight trigger at position i (word-boundary aware,
+   like matchVarAt). Returns the matched length (consumed chars) or 0.
+   Exists so a tag whose label collides with a variable name never gets
+   tokenized as real division ("1000 /budget" must not compute 1000/budget).
+   Mirrors activeSpotlightTags' OSP handling: the operator-padding formatter
+   masks a glued number ("1000/tag") by inserting OSP right before "/", so
+   that must be rejected as a word boundary here (it's a fake one); an OSP
+   right after "/" is just padding noise around a real trigger and is
+   optionally consumed instead of counted as part of the label gap. */
+function tagTriggerLenAt(text, i){
+  if(text[i]!=='/') return 0;
+  const before = text[i-1]||' ';
+  if(/[\p{L}\d_]/u.test(before) || before===OSP) return 0; // must start at a real word boundary
+  const skipOSP = text[i+1]===OSP ? 1 : 0;
+  const labelStart = i+1+skipOSP;
+  for(const tag of store.tags){
+    if(!tag.label) continue;
+    const seg = text.substr(labelStart, tag.label.length);
+    if(seg.toLowerCase()===tag.label.toLowerCase()){
+      const after = text[labelStart+tag.label.length]||' ';
+      if(!/[\p{L}\d_]/u.test(after)) return 1+skipOSP+tag.label.length;
+    }
+  }
+  return 0;
 }
 
 /* ================================================================
@@ -842,7 +872,7 @@ function analyze(text){
    ================================================================ */
 function esc(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
-function buildLineHTML(item, vars, varDefLine, tags){
+function buildLineHTML(item, vars, varDefLine, tags, activeTags){
   const {raw, cls} = item;
   const len=raw.length;
   const hasResult = item.result!==null;   // this line takes part in a computation
@@ -906,6 +936,20 @@ function buildLineHTML(item, vars, varDefLine, tags){
     }
   }
 
+  // ---- tag spotlight: whole-line tint when this tag's "/tagname" trigger
+  //      is active anywhere in the doc AND this line contains the tag's
+  //      bare word. First match in tags order wins (rare multi-tag overlap
+  //      case, kept simple). Independent of the char-painting loop above. ----
+  let spotlightColor=null;
+  if(activeTags && activeTags.size){
+    for(const tag of tags){
+      if(!tag.label) continue;
+      if(!activeTags.has(tag.label.toLowerCase())) continue;
+      const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','iu');
+      if(re.test(raw)){ spotlightColor=tag.color; break; }
+    }
+  }
+
   // ---- variables (top priority) ----
   if(vars.size){
     const names=[...vars].sort((a,b)=>b.length-a.length);
@@ -958,10 +1002,36 @@ function buildLineHTML(item, vars, varDefLine, tags){
   // Empty lines keep their height via the fixed .hl-line height; no filler
   // char is added so overlay text stays 1:1 with the textarea.
   const html = markerHTML + bodyHTML;
-  return {html, cmeta, markerLen, checked:(cls.kind==='checkbox'&&cls.checked)};
+  return {html, cmeta, markerLen, checked:(cls.kind==='checkbox'&&cls.checked), spotlightColor};
 }
 
 function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+
+/* Which tags have a "/tagname" spotlight trigger present anywhere in the
+   document — computed once per render, feeds buildLineHTML's per-line
+   spotlight check. Returns a Set of lowercased labels.
+   The operator-padding formatter (spaceOpsContent) treats a digit-adjacent
+   "/" as division and pads it with OSP — inserting OSP right before "/" when
+   it was glued to a number ("1000/tag") and always right after "/" whenever
+   it pads at all (even "1000 /tag", a real space before "/"). So: an OSP
+   directly before "/" means the formatter masked a glued number (reject —
+   that's not a deliberate trigger), while an OSP directly after "/" is just
+   that same padding noise around a genuinely space-separated trigger and
+   must be tolerated, not required. */
+function activeSpotlightTags(text, tags){
+  const active=new Set();
+  for(const tag of tags){
+    if(!tag.label) continue;
+    const re=new RegExp('(?<![\\p{L}\\d_'+OSP+'])/'+OSP+'?'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','iu');
+    if(re.test(text)) active.add(tag.label.toLowerCase());
+  }
+  return active;
+}
+function hexToRgba(hex, alpha){
+  if(!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  const h=hex.replace('#','');
+  return 'rgba('+parseInt(h.substr(0,2),16)+','+parseInt(h.substr(2,2),16)+','+parseInt(h.substr(4,2),16)+','+alpha+')';
+}
 
 /* ================================================================
    [EDITOR] — DOM wiring, layers, interaction
@@ -1138,11 +1208,13 @@ function render(){
   gutter.innerHTML=g;
 
   // highlight + hotspots + results
+  const activeTags=activeSpotlightTags(text, store.tags);
   let hl='', hs='', rs='';
   for(let k=0;k<n;k++){
-    const built=buildLineHTML(A.lines[k], A.vars, A.varDefLine, store.tags);
+    const built=buildLineHTML(A.lines[k], A.vars, A.varDefLine, store.tags, activeTags);
     model.meta[k]=built.cmeta;
-    hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'">'+built.html+'</div>';
+    const spotStyle=built.spotlightColor? ' style="box-shadow:inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA)+'"' : '';
+    hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'"'+spotStyle+'>'+built.html+'</div>';
 
     const it=A.lines[k];
     const h=lineRowCount[k]*LH;
