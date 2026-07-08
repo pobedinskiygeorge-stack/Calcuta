@@ -273,8 +273,10 @@ button{font-family:inherit;color:inherit}
 /* Inline result pill. Horizontal padding gives breathing room; the equal
    negative margin cancels its layout width so monospace alignment/caret are
    untouched (the outline extends over the spaces around the number). */
-#highlight .rpill{color:var(--text-strong);border-radius:9px;padding:1px 7px;margin:0 -7px;
-  background:rgba(160,158,150,.20)}
+/* Inline result pill: soft gray fill via box-shadow spread (no layout width
+   change, no overhang) so operators keep their normal gap from the number. */
+#highlight .rpill{color:var(--text-strong);border-radius:7px;
+  background:rgba(160,158,150,.20);box-shadow:0 0 0 2px rgba(160,158,150,.20)}
 #highlight .checkmark{color:var(--result);font-weight:600}
 #highlight .cbox{color:var(--dim)}
 .hl-line.checked{color:var(--checked-text)}
@@ -1451,11 +1453,23 @@ function lineBounds(pos){
   const indentLen=(v.slice(lineStart,lineEnd).match(/^[ \t]*/)[0]).length;
   return {lineStart, indentLen, contentStart:lineStart+indentLen, lineEnd};
 }
+/* Result pills are atomic entities: [SENT + optional minus + number]. */
+function pillRegions(){
+  const v=input.value; const regs=[]; let i=0;
+  while((i=v.indexOf(SENT,i))!==-1){
+    const m=v.slice(i+1).match(new RegExp('^-?(?:'+NUM_RE.source+')'));
+    if(m && m[0].length){ regs.push([i, i+1+m[0].length]); i=i+1+m[0].length; }
+    else i++;
+  }
+  return regs;
+}
 function snapCaret(){
   if(input.selectionStart!==input.selectionEnd) return;   // leave selections alone
-  const pos=input.selectionStart;
+  let pos=input.selectionStart;
   const {contentStart}=lineBounds(pos);
-  if(pos<contentStart) input.setSelectionRange(contentStart,contentStart);
+  if(pos<contentStart) pos=contentStart;
+  for(const [s,e] of pillRegions()){ if(pos>s && pos<e){ pos=(pos-s<=e-pos)?s:e; break; } }  // never inside a pill
+  if(pos!==input.selectionStart) input.setSelectionRange(pos,pos);
 }
 /* Start of the previous word from `pos`, not crossing the visual line start. */
 function prevWordStart(s, pos, floor){
@@ -1485,6 +1499,19 @@ function onEditorKeydown(e){
   if(mod && (e.key==='f'||e.key==='F' || e.key==='а'||e.key==='А')){ e.preventDefault(); openFind(); return; }
 
   const collapsed=input.selectionStart===input.selectionEnd;
+
+  // result pills are atomic: skip over / delete as one unit; never enter them
+  if(collapsed && !e.shiftKey && ['ArrowRight','ArrowLeft','Backspace','Delete'].includes(e.key)){
+    const pos=input.selectionStart;
+    for(const [s,en] of pillRegions()){
+      if(pos>s && pos<en){ e.preventDefault(); const edge=(pos-s<=en-pos)?s:en; input.setSelectionRange(edge,edge); return; }
+      if(e.key==='ArrowRight' && pos===s){ e.preventDefault(); input.setSelectionRange(en,en); return; }
+      if(e.key==='ArrowLeft'  && pos===en){ e.preventDefault(); input.setSelectionRange(s,s); return; }
+      if(e.key==='Backspace'  && pos===en){ e.preventDefault(); const v=input.value; commitValue(v.slice(0,s)+v.slice(en), s); return; }
+      if(e.key==='Delete'     && pos===s){ e.preventDefault(); const v=input.value; commitValue(v.slice(0,s)+v.slice(en), s); return; }
+    }
+  }
+
   if(e.key==='Backspace' && !e.shiftKey && collapsed){
     const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos);
     if(pos<=contentStart && lineStart>0){          // at (visual) line start → merge up
