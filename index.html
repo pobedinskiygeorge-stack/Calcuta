@@ -2017,6 +2017,37 @@ function urlRegions(){
 }
 /* Pills AND links are atomic. */
 function atomicRegions(){ return pillRegions().concat(urlRegions()); }
+
+/* ---------- variable pills: a successfully-assigned variable name (its
+   definition AND every usage, within its own "//" section) behaves as a
+   pill for click-to-copy / whole-name Backspace, but — unlike result pills
+   and links — the caret CAN enter it (double-click places the caret inside
+   for normal character editing). No background/outline: visually it's
+   still just the plain green .var text. ----------
+   Ranges are computed on demand per line (cheap: one regex scan of a single
+   line's text), not cached, since this only runs from user interaction
+   (click/dblclick/Backspace), never from the render() hot path. */
+function varPillRangesInLine(row){
+  if(!model || !model.data.lines[row]) return [];
+  const item=model.data.lines[row];
+  const scope=model.data.scopesBySection[item.section];
+  const names=model.data.varsBySection[item.section];
+  if(!scope || !names || !names.size) return [];
+  const eligible=[...names].filter(n=>scope[n]!==undefined).sort((a,b)=>b.length-a.length);
+  const raw=item.raw, out=[];
+  for(const name of eligible){
+    const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(name)+'(?![\\p{L}\\d_])','giu');
+    let mt;
+    while((mt=re.exec(raw))){
+      out.push({start:mt.index, end:mt.index+mt[0].length, name, value:scope[name]});
+      if(mt.index===re.lastIndex) re.lastIndex++;
+    }
+  }
+  return out;
+}
+function varPillRangeAt(row, col){
+  return varPillRangesInLine(row).find(r=>col>=r.start && col<r.end) || null;
+}
 /* A backward delete boundary must never land inside a pill — word/char
    backspace would otherwise chop it (e.g. wipe its digits but leave the
    invisible sentinel behind). Snap it forward to the pill's right edge so
@@ -2071,6 +2102,21 @@ function onEditorKeydown(e){
       if(e.key==='ArrowLeft'  && pos===en){ e.preventDefault(); input.setSelectionRange(s,s); return; }
       if(e.key==='Backspace'  && pos===en){ e.preventDefault(); const v=input.value; commitValue(v.slice(0,s)+v.slice(en), s); return; }
       if(e.key==='Delete'     && pos===s){ e.preventDefault(); const v=input.value; commitValue(v.slice(0,s)+v.slice(en), s); return; }
+    }
+  }
+
+  // variable pills: unlike result pills/links the caret CAN enter them (a
+  // double-click places it inside for normal editing), but a plain Backspace
+  // sitting exactly at the right edge erases the whole name in one press.
+  if(e.key==='Backspace' && !e.shiftKey && collapsed && !(e.ctrlKey||e.altKey||e.metaKey)){
+    const pos=input.selectionStart, {row,col}=offsetToLineCol(pos);
+    const rng=varPillRangeAt(row, col-1);
+    if(rng && rng.end===col){
+      e.preventDefault();
+      const v=input.value, lineStart=pos-col;
+      const from=lineStart+rng.start, to=lineStart+rng.end;
+      commitValue(v.slice(0,from)+v.slice(to), from);
+      return;
     }
   }
 
@@ -2227,13 +2273,46 @@ function onStackCtx(e){
 }
 /* Click on a link pill → open it in a new tab, no confirmation. The click also
    lands on the textarea underneath (placing a caret), which is harmless: links
-   are atomic, so snapCaret bumps the caret to the pill edge. */
+   are atomic, so snapCaret bumps the caret to the pill edge.
+   A click on a variable pill copies its value instead (deferred briefly so a
+   dblclick can cancel it and enter edit mode there instead — see below). */
+let pillClickTimer=null;
 function onStackClick(e){
   const {row,col}=hitTest(e.clientX,e.clientY);
+  const rng=varPillRangeAt(row,col);
+  if(rng){
+    clearTimeout(pillClickTimer);
+    pillClickTimer=setTimeout(()=>{
+      const v=plain(rng.value);
+      copyText(v);
+      showToast('Скопировано: '+v);
+      input.focus();
+      const off=lineColToOffset(row, rng.end);
+      input.setSelectionRange(off,off);
+    }, 260);
+    return;
+  }
   const meta = (model && model.meta[row]) ? model.meta[row][col] : null;
   if(meta && meta.type==='link' && meta.url){
     window.open(fullUrl(meta.url), '_blank', 'noopener,noreferrer');
   }
+}
+/* mousedown on a variable pill blocks the browser's default caret placement
+   there (a plain click should only copy, not also start editing); click/
+   dblclick above decide what actually happens. */
+function onStackMouseDown(e){
+  const {row,col}=hitTest(e.clientX,e.clientY);
+  if(varPillRangeAt(row,col)) e.preventDefault();
+}
+/* Double-click on a variable pill cancels the pending copy and places the
+   caret at the exact double-click position instead, for normal editing. */
+function onStackDblClick(e){
+  const {row,col}=hitTest(e.clientX,e.clientY);
+  if(!varPillRangeAt(row,col)) return;
+  clearTimeout(pillClickTimer);
+  input.focus();
+  const off=lineColToOffset(row,col);
+  input.setSelectionRange(off,off);
 }
 
 /* ---------- hover: row lighten + source-line highlight ---------- */
@@ -2269,6 +2348,22 @@ function hitTest(clientX,clientY){
   const {row,subRow}=rowAtY(y);
   const col=subRow*charsPerLine + Math.floor(x/charW);
   return {row,col};
+}
+/* (row, col-within-line) <-> absolute offset in input.value. Used by the
+   variable-pill click/dblclick/Backspace handling below. */
+function lineColToOffset(row, col){
+  const lines=input.value.split('\n');
+  if(row<0) return 0;
+  if(row>=lines.length) return input.value.length;
+  let off=0;
+  for(let i=0;i<row;i++) off+=lines[i].length+1;
+  return off+Math.max(0,Math.min(col,lines[row].length));
+}
+function offsetToLineCol(pos){
+  const before=input.value.slice(0,pos);
+  const lineStart=before.lastIndexOf('\n')+1;
+  const row=before.split('\n').length-1;
+  return {row, col:pos-lineStart};
 }
 function onStackMove(e){
   const {row,col}=hitTest(e.clientX,e.clientY);
@@ -2829,7 +2924,9 @@ function boot(){
   stack.addEventListener('mousemove', onStackMove);
   stack.addEventListener('mouseleave', onStackLeave);
   stack.addEventListener('contextmenu', onStackCtx);
+  stack.addEventListener('mousedown', onStackMouseDown);
   stack.addEventListener('click', onStackClick);
+  stack.addEventListener('dblclick', onStackDblClick);
   stack.addEventListener('touchstart', onTouchStart, {passive:true});
   stack.addEventListener('touchmove', onTouchMove, {passive:true});
   stack.addEventListener('touchend', onTouchEnd);
