@@ -36,6 +36,7 @@
   --var:#88c892;           /* variables (soft green) — top priority */
   --super:#b98cf5;         /* supertask // (purple) */
   --date:#e3b755;          /* dates dd.mm (yellow) */
+  --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
   --num:#7ec8f5;           /* numbers in a computation (sky blue) */
   --op-work:#e8a24e;       /* working arithmetic signs (orange) */
   --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
@@ -748,6 +749,9 @@ function tokenizeMath(text, vars){
     // "/tagname" spotlight trigger -> skip entirely, never a division op
     const tl = tagTriggerLenAt(text, i);
     if(tl){ i+=tl; continue; }
+    // "/dd.mm" date-spotlight trigger -> skip entirely, never a division op
+    const dl = dateTriggerLenAt(text, i);
+    if(dl){ i+=dl; continue; }
     // number
     const nm = text.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
     if(nm && /\d/.test(nm[0])){ toks.push({t:'num',v:parseNum(nm[0])}); i+=nm[0].length; continue; }
@@ -814,6 +818,20 @@ function tagTriggerLenAt(text, i){
       if(!/[\p{L}\d_]/u.test(after)) return 1+skipOSP+tag.label.length;
     }
   }
+  return 0;
+}
+
+/* Match a "/dd.mm" date-spotlight trigger at position i — same shape as
+   tagTriggerLenAt, but the "label" is a valid date matched via dateAt()
+   instead of a fixed tag word. Guarantees "/27.06" is never tokenized as
+   division, even when it's glued right after a number ("1000 /27.06"). */
+function dateTriggerLenAt(text, i){
+  if(text[i]!=='/') return 0;
+  const before = text[i-1]||' ';
+  if(/[\p{L}\d_]/u.test(before) || before===OSP) return 0; // must start at a real word boundary
+  const skipOSP = text[i+1]===OSP ? 1 : 0;
+  const dm = dateAt(text.slice(i+1+skipOSP));
+  if(dm) return 1+skipOSP+dm[0].length;
   return 0;
 }
 
@@ -989,7 +1007,7 @@ function analyze(text){
    ================================================================ */
 function esc(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
-function buildLineHTML(item, vars, varDefLine, tags, activeTags){
+function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const {raw, cls} = item;
   const len=raw.length;
   const hasResult = item.result!==null;   // this line takes part in a computation
@@ -1073,6 +1091,18 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags){
     }
   }
 
+  // ---- date spotlight: whole-line tint when a "/dd.mm" trigger is active
+  //      anywhere in the doc AND this line contains that exact date as a
+  //      real (non-trigger) occurrence. The line holding just the "/dd.mm"
+  //      trigger itself is NOT tinted by it — unlike tags, a bare date
+  //      match right after the "/" doesn't count, only a separate one.
+  //      Loses to tag spotlight (same priority order as the char-level
+  //      highlight: tag > date). ----
+  let dateSpotlight=false;
+  if(!spotlightColor && activeDates && activeDates.size){
+    dateSpotlight = lineHasBareDate(raw, activeDates);
+  }
+
   // ---- variables (top priority) ----
   if(vars.size){
     const names=[...vars].sort((a,b)=>b.length-a.length);
@@ -1132,7 +1162,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags){
   // Empty lines keep their height via the fixed .hl-line height; no filler
   // char is added so overlay text stays 1:1 with the textarea.
   const html = markerHTML + bodyHTML;
-  return {html, cmeta, markerLen, checked:(cls.kind==='checkbox'&&cls.checked), spotlightColor};
+  return {html, cmeta, markerLen, checked:(cls.kind==='checkbox'&&cls.checked), spotlightColor, dateSpotlight};
 }
 
 function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
@@ -1156,6 +1186,46 @@ function activeSpotlightTags(text, tags){
     if(re.test(text)) active.add(tag.label.toLowerCase());
   }
   return active;
+}
+
+/* Which "/dd.mm" date triggers are present anywhere in the document —
+   computed once per render, feeds buildLineHTML's per-line date-spotlight
+   check. Returns a Set of the exact matched date strings (e.g. "27.06" or
+   "27.06.2026", literal text — no numeric normalization, so "7.06" and
+   "07.06" are treated as different tokens, matching how dates are already
+   shown verbatim everywhere else in the app). Scans char-by-char via
+   dateTriggerLenAt since dates aren't a small fixed word list like tags. */
+function activeSpotlightDates(text){
+  const active=new Set();
+  for(let i=0;i<text.length;i++){
+    const dl=dateTriggerLenAt(text, i);
+    if(dl){
+      const skipOSP = text[i+1]===OSP ? 1 : 0;
+      active.add(text.slice(i+1+skipOSP, i+dl));
+    }
+  }
+  return active;
+}
+
+/* Does `raw` contain one of the active dates as a genuine occurrence — i.e.
+   NOT immediately preceded by "/" (optionally OSP-padded), which would mean
+   it's the trigger itself rather than real content? Scans with dateAt (same
+   technique as the per-char date-paint loop) so a match is always the FULL
+   date token as the app already understands it — e.g. activeDates having
+   "27.06" never falsely matches inside a longer "27.06.2020" on the line,
+   since dateAt there returns the whole "27.06.2020" as one token. */
+function lineHasBareDate(raw, activeDates){
+  let i=0; const len=raw.length;
+  while(i<len){
+    const dm=dateAt(raw.slice(i));
+    if(dm){
+      const isTrigger = raw[i-1]==='/' || (raw[i-1]===OSP && raw[i-2]==='/');
+      if(activeDates.has(dm[0]) && !isTrigger) return true;
+      i+=dm[0].length; continue;
+    }
+    i++;
+  }
+  return false;
 }
 function hexToRgba(hex, alpha){
   if(!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
@@ -1343,11 +1413,13 @@ function render(){
 
   // highlight + hotspots + results
   const activeTags=activeSpotlightTags(text, store.tags);
+  const activeDates=activeSpotlightDates(text);
   let hl='', hs='', rs='';
   for(let k=0;k<n;k++){
-    const built=buildLineHTML(A.lines[k], A.vars, A.varDefLine, store.tags, activeTags);
+    const built=buildLineHTML(A.lines[k], A.vars, A.varDefLine, store.tags, activeTags, activeDates);
     model.meta[k]=built.cmeta;
-    const spotStyle=built.spotlightColor? ' style="box-shadow:inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA)+'"' : '';
+    const spotStyle=built.spotlightColor? ' style="box-shadow:inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA)+'"'
+                   : built.dateSpotlight? ' style="box-shadow:inset 0 0 0 999px var(--date-spot)"' : '';
     hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'"'+spotStyle+'>'+built.html+'</div>';
 
     const it=A.lines[k];
