@@ -341,7 +341,6 @@ button{font-family:inherit;color:inherit}
    instead of being clipped; JS keeps the gutter/results rows the same height
    as their matching (possibly wrapped) highlight row, see render(). */
 .hl-line{min-height:var(--lh);width:100%}
-.hl-line.hover{background:var(--row-hover)}
 .hl-line.src{background:var(--row-src)}
 .hl-line.checked{background:var(--checked-bg)}
 #highlight .num{color:var(--num)}
@@ -2350,7 +2349,9 @@ function clearRowFx(){
 function setRowFx(){
   clearRowFx();
   const rb=highlight.children;
-  if(hoverRow>=0 && rb[hoverRow]) rb[hoverRow].classList.add('hover');
+  // The line merely under the cursor is intentionally NOT highlighted; a
+  // whole-line tint appears only as a "reference" — when hovering a result
+  // pill or a variable usage (→ its defining line), handled via srcRow.
   if(srcRow>=0 && rb[srcRow]){ rb[srcRow].classList.add('src'); const gl=gutter.children[srcRow]; if(gl) gl.classList.add('src'); }
 }
 /* Given a y offset (already minus padY), find which source line it falls in
@@ -2413,10 +2414,10 @@ function onStackMove(e){
   else hidePillHover();
   if(hoverRow>=0 && model.meta[hoverRow]){
     const meta=model.meta[hoverRow][col];
-    if(meta){
-      if(meta.type==='var' && meta.defLine!==undefined && meta.defLine!==null) srcRow=meta.defLine;
-      else if(meta.type==='op'||meta.type==='num') srcRow=hoverRow;
-    }
+    // Only a variable usage lights its source line (the "отсылка" back to
+    // where it was defined). Plain numbers/operators no longer self-highlight
+    // the current line — the line under the cursor stays untinted.
+    if(meta && meta.type==='var' && meta.defLine!==undefined && meta.defLine!==null) srcRow=meta.defLine;
   }
   setRowFx();
 }
