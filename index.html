@@ -45,7 +45,8 @@
   --checked-text:#79856f;
   --row-hover:rgba(255,255,255,.035);
   --row-src:rgba(201,100,66,.14);
-  --sel:rgba(201,100,66,.30);
+  --sel:rgba(34,230,118,.55);
+  --sel-text:#0a1f10;      /* forced text color under selection (any syntax color reads on bright green) */
   --link:#6fb2f0;          /* URL pill */
   --scroll-thumb:#3a3630;
   --pinned-tasks:#8b6fa8;  /* Задачи (subtle purple) */
@@ -88,7 +89,8 @@
   --checked-text:#9a9488;
   --row-hover:rgba(0,0,0,.045);
   --row-src:rgba(201,100,66,.12);
-  --sel:rgba(201,100,66,.22);
+  --sel:rgba(0,200,100,.50);
+  --sel-text:#0a1f10;
   --link:#2b7fc4;
   --scroll-thumb:#cfc9bd;
   --pinned-tasks:#9a7ba8;  /* Задачи (subtle purple) */
@@ -102,7 +104,7 @@ body{
   font-family:var(--font-ui);font-size:var(--fs);
   -webkit-font-smoothing:antialiased;overflow:hidden;
 }
-::selection{background:var(--sel)}
+::selection{background:var(--sel);color:var(--sel-text)}
 button{font-family:inherit;color:inherit}
 
 #app{display:flex;height:100vh;width:100vw;position:relative}
@@ -373,7 +375,7 @@ button{font-family:inherit;color:inherit}
   background:transparent;color:transparent;caret-color:var(--accent);
   outline:none;white-space:pre-wrap;word-break:break-all;
 }
-#input::selection{background:var(--sel)}
+#input::selection{background:var(--sel);color:var(--sel-text)}
 
 /* search highlight layer (yellow behind text) */
 #searchlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
@@ -671,6 +673,7 @@ function isFmtWS(ch){ return ch===NBSP || ch===OSP; }
 const SENT = '\u2063';     // invisible marker: a copied result → inline pill
 function isCore(ch){ return !isFmtWS(ch) && ch!==SENT; }
 const TAG_SPOTLIGHT_ALPHA = 0.18;   // whole-line tint strength for an active "/tag" spotlight
+const EMPTY_VARS = new Set(), EMPTY_OBJ = {};   // shared read-only fallbacks for sections with no vars
 
 /* Group the integer part every 3 digits with NBSP. */
 function groupDigits(intStr){
@@ -753,6 +756,8 @@ function tokenizeMath(text, vars){
     // "/dd.mm" date-spotlight trigger -> skip entirely, never a division op
     const dl = dateTriggerLenAt(text, i);
     if(dl){ i+=dl; continue; }
+    // "()" round-marker -> skip entirely, never an empty group
+    if(c==='(' && text[i+1]===')'){ i+=2; continue; }
     // number
     const nm = text.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
     if(nm && /\d/.test(nm[0])){ toks.push({t:'num',v:parseNum(nm[0])}); i+=nm[0].length; continue; }
@@ -936,34 +941,68 @@ function classify(line){
   return {kind:'text', markerLen:0};
 }
 
-/* Collect all variable-assignment names across the whole document. */
 const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?|#\s?)?([\p{L}][\p{L}\d _]*?)\s*=\s*(.+)$/u;
-function collectVars(lines){
-  const set=new Set();
-  for(const line of lines){
+
+/* A "//" supertask line starts a brand-new variable-scope section (itself
+   included); everything before the first "//" is section 0. Sections let
+   the same variable name hold independent values under different "//"
+   headings without colliding. */
+function computeSections(lines){
+  const sec=new Array(lines.length);
+  let cur=0;
+  for(let i=0;i<lines.length;i++){
+    if(classify(lines[i]).kind==='super') cur++;
+    sec[i]=cur;
+  }
+  return sec;
+}
+
+/* Collect variable-assignment names per section (mirrors the old whole-doc
+   collectVars, just bucketed) so a name is only "variable-shaped" for the
+   highlighter/tokenizer within the section that actually defines it. */
+function collectVarsBySection(lines, secOf){
+  const bySec={};
+  lines.forEach((line, idx)=>{
     const m=ASSIGN_RE.exec(line);
     if(m){
       const name=m[1].trim().toLowerCase();
-      // reject if the "name" is actually a number or a keyword
-      if(name && !/^\d/.test(name) && !KEYWORDS.has(name)) set.add(name);
+      if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
+        const s=secOf[idx];
+        (bySec[s] || (bySec[s]=new Set())).add(name);
+      }
     }
-  }
-  return set;
+  });
+  return bySec;
 }
 
-/* Analyze the full document top-to-bottom, producing per-line results. */
+/* Rounding marker: a literal "()" anywhere on the line rounds that line's
+   computed result to the nearest integer. tokenizeMath already skips "()"
+   entirely (never an empty group), so detection here is a plain substring
+   check independent of tokenization. */
+function hasRoundMarker(s){ return s.indexOf('()')!==-1; }
+
+/* Analyze the full document top-to-bottom, producing per-line results.
+   Variables are scoped per "//" section: each section gets its own `scope`
+   (assignment values) and `varDefLine` (name -> first defining line index
+   within that section), so the same name can hold a different value in
+   parallel under a different heading. */
 function analyze(text){
   const lines=text.split('\n');
-  const vars=collectVars(lines);
-  const scope={};
+  const secOf=computeSections(lines);
+  const varsBySection=collectVarsBySection(lines, secOf);
+  const scopesBySection={};
+  const varDefLineBySection={};
   // `contig` = results of the unbroken run of lines directly above; a blank
   // line or a heading (// or #) breaks the run so `sum` only adds a column.
   const ctx={contig:[], prev:null};
-  const varDefLine={};                       // name -> first defining line index
   const out=[];
 
   lines.forEach((line, idx)=>{
     const cls=classify(line);
+    const sec=secOf[idx];
+    const vars=varsBySection[sec] || (varsBySection[sec]=new Set());
+    const scope=scopesBySection[sec] || (scopesBySection[sec]={});
+    const varDefLine=varDefLineBySection[sec] || (varDefLineBySection[sec]={});
     const content=line.slice(cls.markerLen);
     const isBlank=line.trim()==='';
     let result=null, assignedName=null;
@@ -978,7 +1017,8 @@ function analyze(text){
       if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
         const rhs=am[2];
         const toks=tokenizeMath(rhs, vars);
-        const v=evaluate(toks, scope, ctx);
+        let v=evaluate(toks, scope, ctx);
+        if(v!==null && hasRoundMarker(rhs)) v=Math.round(v);
         if(v!==null){ scope[name]=v; result=v; assignedName=name; }
         if(varDefLine[name]===undefined) varDefLine[name]=idx;
       }
@@ -987,6 +1027,7 @@ function analyze(text){
     if(result===null && cls.kind!=='super' && cls.kind!=='header'){
       const toks=tokenizeMath(content, vars);
       result=evaluate(toks, scope, ctx);
+      if(result!==null && hasRoundMarker(content)) result=Math.round(result);
     }
 
     // feed aggregation (skip boundary/heading lines)
@@ -995,10 +1036,10 @@ function analyze(text){
       ctx.prev=result;
     }
 
-    out.push({raw:line, cls, content, result, assignedName});
+    out.push({raw:line, cls, content, result, assignedName, section:sec});
   });
 
-  return {lines:out, vars, varDefLine, scope};
+  return {lines:out, varsBySection, varDefLineBySection, scopesBySection};
 }
 
 /* ================================================================
@@ -1416,7 +1457,8 @@ function render(){
   const activeDates=activeSpotlightDates(text);
   let hl='', hs='', rs='';
   for(let k=0;k<n;k++){
-    const built=buildLineHTML(A.lines[k], A.vars, A.varDefLine, store.tags, activeTags, activeDates);
+    const lineSec=A.lines[k].section;
+    const built=buildLineHTML(A.lines[k], A.varsBySection[lineSec]||EMPTY_VARS, A.varDefLineBySection[lineSec]||EMPTY_OBJ, store.tags, activeTags, activeDates);
     model.meta[k]=built.cmeta;
     const spotStyle=built.spotlightColor? ' style="box-shadow:inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA)+'"'
                    : built.dateSpotlight? ' style="box-shadow:inset 0 0 0 999px var(--date-spot)"' : '';
