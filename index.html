@@ -2092,8 +2092,16 @@ function onPaste(e){
   document.execCommand('insertText',false,normalized);
 }
 function normalizePasted(txt){
-  // Convert loose numbers (1,234.56 / 1234.5 / 714285,71428571) to app format:
-  // the decimal separator (dot or comma) becomes a comma, thousands regroup.
+  // Convert loose numbers (1,234.56 / 1234.5 / 714285,71428571 / "1 234,56")
+  // pasted from mail/spreadsheets/Word to app format so they're recognized as
+  // real numbers and take part in math: the decimal separator (dot or comma)
+  // becomes a comma and thousands regroup.
+  // 1) normalize the non-breaking / narrow / thin spaces web content uses for
+  //    grouping into a regular space, then 2) collapse genuine space-grouped
+  //    thousands ("1 234 567,89" → "1234567,89") so the decimal-aware pass sees
+  //    a clean number (a lone "17 6" is NOT collapsed — "6" isn't a 3-digit group).
+  txt = txt.replace(/[   ]/g, ' ');
+  txt = txt.replace(/\d{1,3}(?: \d{3})+(?:[.,]\d+)?/g, s => s.replace(/ /g, ''));
   return txt.replace(/\d[\d.,]*\d|\d/g, (m)=>{
     const dm=dateAt(m); if(dm && dm[0]===m) return m;   // keep pure dates
     const lastSep=Math.max(m.lastIndexOf(','), m.lastIndexOf('.'));
@@ -2171,7 +2179,10 @@ function applyLineColor(color){
 function onResultsClick(e){
   const el=e.target.closest('.result-line.has'); if(!el) return;
   const v=el.dataset.v||'';
-  copyText(SENT+v);           // sentinel makes a pasted result render as an inline pill
+  // Copy a clean number (no invisible sentinel, no grouping spaces) so it
+  // pastes as a real, computable number into Sheets/Excel/Word etc. Pasting it
+  // back into Calcuta is fine too — normalizePasted keeps it a usable number.
+  copyText(v);
   el.classList.add('copied');
   setTimeout(()=>el.classList.remove('copied'),450);
   showToast('Скопировано: '+v);
