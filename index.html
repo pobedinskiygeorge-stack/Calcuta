@@ -294,6 +294,10 @@ button{font-family:inherit;color:inherit}
    change, no overhang) so operators keep their normal gap from the number. */
 #highlight .rpill{color:var(--text-strong);border-radius:7px;
   background:rgba(160,158,150,.20);box-shadow:0 0 0 2px rgba(160,158,150,.20)}
+/* Link pill: soft blue fill + underline; opens on click via the #stack
+   handler (this overlay is pointer-events:none, so the click passes through). */
+#highlight .link{color:#6fb2f0;text-decoration:underline;text-underline-offset:2px;
+  border-radius:6px;background:rgba(111,178,240,.14);box-shadow:0 0 0 2px rgba(111,178,240,.14)}
 #highlight .checkmark{color:var(--result);font-weight:600}
 #highlight .cbox{color:var(--dim)}
 .hl-line.checked{color:var(--checked-text)}
@@ -664,6 +668,9 @@ function tokenizeMath(text, vars){
   while(i<n){
     const c = text[i];
     if(c===' '||c==='\t'||c===OSP||c===SENT){ i++; continue; }
+    // URL -> skip entirely (its dots/slashes/digits are not math)
+    const ul = urlLenAt(text, i);
+    if(ul){ i+=ul; continue; }
     // date -> skip (treated as context for math)
     const dm = dateAt(text.slice(i));
     if(dm){ i+=dm[0].length; continue; }
@@ -916,7 +923,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags){
   const len=raw.length;
   const hasResult = item.result!==null;   // this line takes part in a computation
   // char-class array; higher priority overrides
-  const P={base:0, num:1, date:2, op:3, tag:4, varr:5};
+  const P={base:0, num:1, date:2, op:3, tag:4, varr:5, link:6};
   const cclass=new Array(len).fill('');   // css class per char
   const cmeta =new Array(len).fill(null); // {type, defLine} for hover
   const prio  =new Array(len).fill(-1);
@@ -944,6 +951,8 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags){
   if(cls.kind!=='super'&&cls.kind!=='header'){
     let i=bodyStart;
     while(i<len){
+      const ul=urlLenAt(scanText,i);
+      if(ul){ i+=ul; continue; }   // digits/dots inside a URL aren't numbers or dates
       const dm=dateAt(scanText.slice(i));
       if(dm){ paint(i,i+dm[0].length,'date',P.date,{type:'date'}); i+=dm[0].length; continue; }
       const nm=scanText.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
@@ -1005,6 +1014,13 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags){
         if(mt.index===re.lastIndex) re.lastIndex++;
       }
     }
+  }
+
+  // ---- links: paint each URL as one clickable pill (highest priority, so it
+  //      overrides any number/tag/var colouring that fell inside it). ----
+  for(const r of urlRanges(raw)){
+    if(r.start<bodyStart) continue;
+    paint(r.start, r.end, 'link', P.link, {type:'link', url:r.url});
   }
 
   // ---- copied-result pills: a SENT marker → render the number that follows
@@ -1134,6 +1150,8 @@ function regroupText(text, caret){
   let out=''; let i=0; const n=text.length;
   let prevChar='';
   while(i<n){
+    const ul=urlLenAt(text,i);
+    if(ul){ out+=text.substr(i,ul); i+=ul; prevChar=text[i-1]; continue; }   // never reformat inside a URL
     const rest=text.slice(i);
     const dm=dateAt(rest);
     if(dm){ out+=dm[0]; i+=dm[0].length; prevChar=dm[0].slice(-1); continue; }
@@ -1177,6 +1195,8 @@ function spaceOpsContent(s){
   const lastCore=()=>{ for(let k=out.length-1;k>=0;k--){ const c=out[k]; if(isCore(c)&&c!==' '&&c!=='\t') return c; } return ''; };
   const nextCore=(from)=>{ for(let k=from;k<n;k++){ const c=s[k]; if(isCore(c)&&c!==' '&&c!=='\t') return c; } return ''; };
   for(let i=0;i<n;i++){
+    const ul=urlLenAt(s,i);
+    if(ul){ out+=s.substr(i,ul); i+=ul-1; continue; }   // never pad operators inside a URL
     const ch=s[i];
     if('+-*/^='.includes(ch)){
       const lc=lastCore(), rc=nextCore(i+1);
@@ -1775,12 +1795,49 @@ function pillRegions(){
   }
   return regs;
 }
+
+/* ---------- links: a URL renders as a clickable pill and behaves atomically
+   like a result pill (caret never enters it, Backspace removes the whole
+   thing). The number/operator formatter and the math parser skip URL text so
+   "site.com/2024" isn't mangled into "site.com / 2024" or computed. ---------- */
+function urlLenAt(s, i){
+  const c=s[i];
+  if(c!=='h'&&c!=='H'&&c!=='w'&&c!=='W') return 0;                 // cheap early-out
+  if(i>0 && /[\p{L}\d@]/u.test(s[i-1])) return 0;                  // start at a boundary (not mid-word / email host)
+  const head=/^(?:https?:\/\/|www\.)/i.exec(s.slice(i, i+9));
+  if(!head) return 0;
+  let j=i+head[0].length;
+  if(j>=s.length || /\s/.test(s[j])) return 0;                    // nothing after the scheme → not a link
+  while(j<s.length && !/\s/.test(s[j])) j++;                      // URL runs to the next whitespace
+  while(j-i>head[0].length && /[.,;:!?)\]}'"»]/.test(s[j-1])) j--; // trim trailing sentence punctuation
+  return j-i;
+}
+function fullUrl(u){ return /^www\./i.test(u) ? 'https://'+u : u; }
+function urlRanges(line){
+  const r=[]; let i=0;
+  while(i<line.length){
+    const L=urlLenAt(line,i);
+    if(L){ r.push({start:i, end:i+L, url:line.slice(i,i+L)}); i+=L; }
+    else i++;
+  }
+  return r;
+}
+function urlRegions(){
+  const v=input.value, regs=[]; let off=0;
+  for(const line of v.split('\n')){
+    for(const r of urlRanges(line)) regs.push([off+r.start, off+r.end]);
+    off+=line.length+1;
+  }
+  return regs;
+}
+/* Pills AND links are atomic. */
+function atomicRegions(){ return pillRegions().concat(urlRegions()); }
 /* A backward delete boundary must never land inside a pill — word/char
    backspace would otherwise chop it (e.g. wipe its digits but leave the
    invisible sentinel behind). Snap it forward to the pill's right edge so
    the pill is only ever removed as one atomic unit, on a later keypress. */
 function clampFromPill(from){
-  for(const [s,e] of pillRegions()){ if(from>s && from<e) return e; }
+  for(const [s,e] of atomicRegions()){ if(from>s && from<e) return e; }
   return from;
 }
 function snapCaret(){
@@ -1788,7 +1845,7 @@ function snapCaret(){
   let pos=input.selectionStart;
   const {contentStart}=lineBounds(pos);
   if(pos<contentStart) pos=contentStart;
-  for(const [s,e] of pillRegions()){ if(pos>s && pos<e){ pos=(pos-s<=e-pos)?s:e; break; } }  // never inside a pill
+  for(const [s,e] of atomicRegions()){ if(pos>s && pos<e){ pos=(pos-s<=e-pos)?s:e; break; } }  // never inside a pill/link
   if(pos!==input.selectionStart) input.setSelectionRange(pos,pos);
 }
 /* Start of the previous word from `pos`, not crossing the visual line start. */
@@ -1820,10 +1877,10 @@ function onEditorKeydown(e){
 
   const collapsed=input.selectionStart===input.selectionEnd;
 
-  // result pills are atomic: skip over / delete as one unit; never enter them
+  // result pills and links are atomic: skip over / delete as one unit; never enter them
   if(collapsed && !e.shiftKey && ['ArrowRight','ArrowLeft','Backspace','Delete'].includes(e.key)){
     const pos=input.selectionStart;
-    for(const [s,en] of pillRegions()){
+    for(const [s,en] of atomicRegions()){
       if(pos>s && pos<en){ e.preventDefault(); const edge=(pos-s<=en-pos)?s:en; input.setSelectionRange(edge,edge); return; }
       if(e.key==='ArrowRight' && pos===s){ e.preventDefault(); input.setSelectionRange(en,en); return; }
       if(e.key==='ArrowLeft'  && pos===en){ e.preventDefault(); input.setSelectionRange(s,s); return; }
@@ -1967,6 +2024,16 @@ function onStackCtx(e){
     e.preventDefault();
     closeCtxMenu();
     openLineMenu(e.clientX,e.clientY,row);
+  }
+}
+/* Click on a link pill → open it in a new tab, no confirmation. The click also
+   lands on the textarea underneath (placing a caret), which is harmless: links
+   are atomic, so snapCaret bumps the caret to the pill edge. */
+function onStackClick(e){
+  const {row,col}=hitTest(e.clientX,e.clientY);
+  const meta = (model && model.meta[row]) ? model.meta[row][col] : null;
+  if(meta && meta.type==='link' && meta.url){
+    window.open(fullUrl(meta.url), '_blank', 'noopener,noreferrer');
   }
 }
 
@@ -2563,6 +2630,7 @@ function boot(){
   stack.addEventListener('mousemove', onStackMove);
   stack.addEventListener('mouseleave', onStackLeave);
   stack.addEventListener('contextmenu', onStackCtx);
+  stack.addEventListener('click', onStackClick);
   stack.addEventListener('touchstart', onTouchStart, {passive:true});
   stack.addEventListener('touchmove', onTouchMove, {passive:true});
   stack.addEventListener('touchend', onTouchEnd);
@@ -2682,7 +2750,7 @@ document.addEventListener('DOMContentLoaded', boot);
 
 /* expose a tiny hook for automated testing */
 window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, tokenizeMath, normalizePasted, dateAt,
-  getStore:()=>store, mergeStores, syncPayload,
+  getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
 
 })();
