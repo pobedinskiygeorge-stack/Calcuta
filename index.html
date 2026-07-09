@@ -79,6 +79,7 @@
   --var:#3f9a52;
   --super:#7c4dd6;
   --date:#b07d10;
+  --date-spot:rgba(176,125,16,.14);
   --num:#2b7fc4;
   --op-work:#cc7519;
   --op:#8a8272;
@@ -1093,11 +1094,10 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
 
   // ---- date spotlight: whole-line tint when a "/dd.mm" trigger is active
   //      anywhere in the doc AND this line contains that exact date as a
-  //      real (non-trigger) occurrence. The line holding just the "/dd.mm"
-  //      trigger itself is NOT tinted by it — unlike tags, a bare date
-  //      match right after the "/" doesn't count, only a separate one.
-  //      Loses to tag spotlight (same priority order as the char-level
-  //      highlight: tag > date). ----
+  //      real occurrence. Same rule as tag spotlight above: the line
+  //      holding just the "/dd.mm" trigger itself is not tinted by that
+  //      occurrence alone. Loses to tag spotlight (same priority order as
+  //      the char-level highlight: tag > date). ----
   let dateSpotlight=false;
   if(!spotlightColor && activeDates && activeDates.size){
     dateSpotlight = lineHasBareDate(raw, activeDates);
