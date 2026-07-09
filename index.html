@@ -6,6 +6,8 @@
 <title>Calcuta — редактор с математикой</title>
 </head>
 <body>
+<!-- Apply the saved theme before first paint so there's no dark→light flash. -->
+<script>try{if((localStorage.getItem('calcuta.theme')||'dark')==='light')document.documentElement.classList.add('light');}catch(e){}</script>
 <!-- Firebase (Google sign-in + Firestore sync) — loaded with `defer` so it
      never blocks first paint; ready by DOMContentLoaded, when boot() wires it up. -->
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -43,6 +45,8 @@
   --row-hover:rgba(255,255,255,.035);
   --row-src:rgba(201,100,66,.14);
   --sel:rgba(201,100,66,.30);
+  --link:#6fb2f0;          /* URL pill */
+  --scroll-thumb:#3a3630;
 
   --font-mono:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,'Liberation Mono',monospace;
   --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
@@ -52,6 +56,37 @@
   --pad-x:16px;
   --gutter-w:30px;
   --results-w:150px;
+}
+
+/* ---------- Light theme (warm paper) — toggled via <html class="light">.
+   Only colours are overridden; fonts/sizes/layout come from :root above.
+   Syntax colours are darkened so they stay readable on a light background. */
+:root.light{
+  --bg:#f6f3ec;
+  --bg-editor:#fdfbf7;
+  --bg-panel:#eeeae1;
+  --border:#e2ddd2;
+  --border-soft:#eae6dc;
+  --text:#413c34;
+  --text-strong:#26221c;
+  --dim:#9c968a;
+  --dim-2:#bcb6aa;
+  --accent:#c96442;
+  --accent-soft:rgba(201,100,66,.15);
+  --var:#3f9a52;
+  --super:#7c4dd6;
+  --date:#b07d10;
+  --num:#2b7fc4;
+  --op-work:#cc7519;
+  --op:#8a8272;
+  --result:#2f9666;
+  --checked-bg:rgba(101,158,120,.16);
+  --checked-text:#9a9488;
+  --row-hover:rgba(0,0,0,.045);
+  --row-src:rgba(201,100,66,.12);
+  --sel:rgba(201,100,66,.22);
+  --link:#2b7fc4;
+  --scroll-thumb:#cfc9bd;
 }
 
 *{box-sizing:border-box}
@@ -76,13 +111,32 @@ button{font-family:inherit;color:inherit}
 }
 #app.sidebar-hidden #sidebar{margin-left:-251px}   /* fully off-screen (incl. border) */
 .brand{
-  display:flex;align-items:center;gap:9px;
+  display:flex;align-items:center;gap:9px;position:relative;
   padding:16px 18px 14px;border-bottom:1px solid var(--border-soft);
 }
 .brand .name{
   font-family:var(--font-mono);font-weight:600;font-size:15px;
   color:var(--text-strong);letter-spacing:.5px;
+  background:none;border:0;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
 }
+.brand .name .caret{font-size:10px;color:var(--dim);transition:transform .15s}
+.brand .name[aria-expanded="true"] .caret{transform:rotate(180deg)}
+.brand-menu{
+  position:absolute;top:44px;left:16px;z-index:50;min-width:150px;
+  background:var(--bg-panel);border:1px solid var(--border);border-radius:10px;
+  padding:5px;box-shadow:0 12px 34px rgba(0,0,0,.35);
+}
+.brand-menu[hidden]{display:none}
+.bm-title{font-size:11px;color:var(--dim);padding:4px 8px 5px;letter-spacing:.3px}
+.bm-item{
+  display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  padding:7px 8px;border:0;border-radius:7px;background:none;color:var(--text);
+  font-size:13px;cursor:pointer;
+}
+.bm-item:hover{background:var(--bg-editor)}
+.bm-item .bm-check{width:14px;flex:0 0 auto;color:var(--accent);visibility:hidden}
+.bm-item.active .bm-check{visibility:visible}
+.bm-item .bm-ic{width:15px;flex:0 0 auto;opacity:.8}
 
 /* sidebar tabs: Документы | Тэги */
 .side-tabs{display:flex;gap:6px;padding:10px 14px 2px}
@@ -243,7 +297,7 @@ button{font-family:inherit;color:inherit}
   font-family:var(--font-mono);font-size:var(--fs);line-height:var(--lh);
 }
 #editor::-webkit-scrollbar{width:11px}
-#editor::-webkit-scrollbar-thumb{background:#3a3630;border-radius:8px;border:3px solid var(--bg-editor)}
+#editor::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:8px;border:3px solid var(--bg-editor)}
 
 /* gutter (line numbers) — thin dim column, selectable, colorable */
 #gutter{
@@ -296,7 +350,7 @@ button{font-family:inherit;color:inherit}
   background:rgba(160,158,150,.20);box-shadow:0 0 0 2px rgba(160,158,150,.20)}
 /* Link pill: soft blue fill + underline; opens on click via the #stack
    handler (this overlay is pointer-events:none, so the click passes through). */
-#highlight .link{color:#6fb2f0;text-decoration:underline;text-underline-offset:2px;
+#highlight .link{color:var(--link);text-decoration:underline;text-underline-offset:2px;
   border-radius:6px;background:rgba(111,178,240,.14);box-shadow:0 0 0 2px rgba(111,178,240,.14)}
 #highlight .checkmark{color:var(--result);font-weight:600}
 #highlight .cbox{color:var(--dim)}
@@ -322,7 +376,7 @@ button{font-family:inherit;color:inherit}
 .cbox-hit{
   position:absolute;width:3ch;height:var(--lh);cursor:pointer;pointer-events:auto;border-radius:4px;
 }
-.cbox-hit:hover{background:rgba(255,255,255,.06)}
+.cbox-hit:hover{background:var(--row-hover)}
 
 /* results column */
 #results{
@@ -340,7 +394,7 @@ button{font-family:inherit;color:inherit}
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   cursor:pointer;transition:border-color .12s,background .12s,color .12s;
 }
-.result-line.has:hover .pill{background:rgba(160,158,150,.28);color:#fff}
+.result-line.has:hover .pill{background:rgba(160,158,150,.28);color:var(--text-strong)}
 .result-line.copied .pill{background:var(--accent);color:#fff}
 
 /* context menu (line-number colors) */
@@ -449,7 +503,18 @@ button{font-family:inherit;color:inherit}
   <div id="backdrop"></div>
   <aside id="sidebar">
     <div class="brand">
-      <div class="name">calcuta</div>
+      <button class="name" id="brand-btn" type="button" aria-haspopup="true" aria-expanded="false">
+        calcuta<span class="caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="brand-menu" id="brand-menu" role="menu" hidden>
+        <div class="bm-title">Тема</div>
+        <button class="bm-item" data-theme="dark" role="menuitemradio" type="button">
+          <span class="bm-check">✓</span><span class="bm-ic" aria-hidden="true">🌙</span>Тёмная
+        </button>
+        <button class="bm-item" data-theme="light" role="menuitemradio" type="button">
+          <span class="bm-check">✓</span><span class="bm-ic" aria-hidden="true">☀️</span>Светлая
+        </button>
+      </div>
     </div>
     <div class="search-box">
       <svg class="search-ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M10 4a6 6 0 014.47 10l4.26 4.26-1.42 1.42L13.04 15.4A6 6 0 1110 4zm0 2a4 4 0 100 8 4 4 0 000-8z"/></svg>
@@ -1992,6 +2057,20 @@ function selectSideTab(tab){
   if(tags) tags.hidden = tab!=='tags';
 }
 
+/* ---------- theme (dark / light) — device-local, not synced ---------- */
+const THEME_KEY='calcuta.theme';
+function currentTheme(){ try{ return localStorage.getItem(THEME_KEY)||'dark'; }catch(e){ return 'dark'; } }
+function applyTheme(t){
+  document.documentElement.classList.toggle('light', t==='light');
+  document.querySelectorAll('#brand-menu .bm-item').forEach(b=>b.classList.toggle('active', b.dataset.theme===t));
+}
+function setTheme(t){ try{ localStorage.setItem(THEME_KEY,t); }catch(e){} applyTheme(t); }
+function brandMenuOpen(show){
+  const btn=$('brand-btn'), menu=$('brand-menu');
+  const open = show===undefined ? menu.hidden : show;
+  menu.hidden=!open; btn.setAttribute('aria-expanded', open?'true':'false');
+}
+
 /* ---------- line-number color context menu ---------- */
 const PALETTE=['#e0663f','#e3b755','#8fcf9c','#6fb2f0','#c79bf0','#e78ab0',
                '#7fd4c4','#b7c96b','#d98f5a','#9aa0aa','#f0d071','#ffffff'];
@@ -2680,6 +2759,19 @@ function boot(){
   document.querySelectorAll('.side-tab').forEach(btn=>{
     btn.addEventListener('click', ()=>selectSideTab(btn.dataset.tab));
   });
+
+  // theme dropdown under the "calcuta" name
+  applyTheme(currentTheme());   // sync the check marks (the class was already set pre-paint)
+  const brandBtn=$('brand-btn'), brandMenu=$('brand-menu');
+  brandBtn.addEventListener('click', e=>{ e.stopPropagation(); brandMenuOpen(); });
+  brandMenu.addEventListener('click', e=>{
+    const it=e.target.closest('.bm-item'); if(!it) return;
+    setTheme(it.dataset.theme); brandMenuOpen(false);
+  });
+  document.addEventListener('click', e=>{
+    if(!brandMenu.hidden && !brandMenu.contains(e.target) && !brandBtn.contains(e.target)) brandMenuOpen(false);
+  });
+  document.addEventListener('keydown', e=>{ if(e.key==='Escape' && !brandMenu.hidden) brandMenuOpen(false); });
 
   $('toggle-sidebar').addEventListener('click', ()=>{ appEl.classList.toggle('sidebar-hidden'); computeCharsPerLine(); render(); });
   $('backdrop').addEventListener('click', ()=>{ appEl.classList.add('sidebar-hidden'); computeCharsPerLine(); render(); });
