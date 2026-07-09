@@ -34,6 +34,7 @@
   --accent:#c96442;        /* Claude clay */
   --accent-soft:rgba(201,100,66,.16);
   --var:#88c892;           /* variables (soft green) — top priority */
+  --pill-hover-bg:rgba(136,200,146,.18); /* oval bg behind a variable, hover-only */
   --super:#b98cf5;         /* supertask // (purple) */
   --date:#e3b755;          /* dates dd.mm (yellow) */
   --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
@@ -45,8 +46,8 @@
   --checked-text:#79856f;
   --row-hover:rgba(255,255,255,.035);
   --row-src:rgba(201,100,66,.14);
-  --sel:rgba(34,230,118,.55);
-  --sel-text:#0a1f10;      /* forced text color under selection (any syntax color reads on bright green) */
+  --sel:rgba(255,140,45,.5);
+  --sel-text:#2a1400;      /* forced text color under selection (any syntax color stays readable) */
   --link:#6fb2f0;          /* URL pill */
   --scroll-thumb:#3a3630;
   --pinned-tasks:#8b6fa8;  /* Задачи (subtle purple) */
@@ -78,6 +79,7 @@
   --accent:#c96442;
   --accent-soft:rgba(201,100,66,.15);
   --var:#3f9a52;
+  --pill-hover-bg:rgba(63,154,82,.16);
   --super:#7c4dd6;
   --date:#b07d10;
   --date-spot:rgba(176,125,16,.14);
@@ -89,8 +91,8 @@
   --checked-text:#9a9488;
   --row-hover:rgba(0,0,0,.045);
   --row-src:rgba(201,100,66,.12);
-  --sel:rgba(0,200,100,.50);
-  --sel-text:#0a1f10;
+  --sel:rgba(230,120,30,.42);
+  --sel-text:#2a1400;
   --link:#2b7fc4;
   --scroll-thumb:#cfc9bd;
   --pinned-tasks:#9a7ba8;  /* Задачи (subtle purple) */
@@ -382,6 +384,12 @@ button{font-family:inherit;color:inherit}
 .search-mark{position:absolute;height:var(--lh);background:rgba(227,183,85,.30);border-radius:3px}
 .search-mark.active{background:rgba(227,183,85,.62);box-shadow:0 0 0 1px rgba(227,183,85,.85)}
 
+/* oval pill background behind a variable, shown ONLY while hovering it —
+   sits behind #highlight's text (lower in the DOM, same z-index) so the
+   green .var glyphs paint on top of it, not the other way round. */
+#pillhover{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none}
+.pill-hover-box{position:absolute;height:var(--lh);border-radius:7px;background:var(--pill-hover-bg)}
+
 #hotspots{position:absolute;top:0;left:0;width:100%;height:100%;z-index:4;pointer-events:none}
 .cbox-hit{
   position:absolute;width:3ch;height:var(--lh);cursor:pointer;pointer-events:auto;border-radius:4px;
@@ -628,6 +636,7 @@ button{font-family:inherit;color:inherit}
       <div id="gutter"></div>
       <div id="stack">
         <div id="searchlayer"></div>
+        <div id="pillhover"></div>
         <pre id="highlight" class="layer" aria-hidden="true"></pre>
         <textarea id="input" class="layer" spellcheck="false" autocomplete="off"
                   autocapitalize="off"></textarea>
@@ -941,7 +950,11 @@ function classify(line){
   return {kind:'text', markerLen:0};
 }
 
-const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?|#\s?)?([\p{L}][\p{L}\d _]*?)\s*=\s*(.+)$/u;
+/* Group 2 is an optional "()" round-marker between the name and "=" (e.g.
+   "переменная () = 1000 * 1.25") - without it, "()" there would make the
+   whole line fail to match at all (parens aren't in the name charset),
+   silently dropping the assignment and the name's highlighting with it. */
+const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?|#\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.+)$/u;
 
 /* A "//" supertask line starts a brand-new variable-scope section (itself
    included); everything before the first "//" is section 0. Sections let
@@ -976,10 +989,12 @@ function collectVarsBySection(lines, secOf){
 }
 
 /* Rounding marker: a literal "()" anywhere on the line rounds that line's
-   computed result to the nearest integer. tokenizeMath already skips "()"
-   entirely (never an empty group), so detection here is a plain substring
-   check independent of tokenization. */
+   computed result UP to the nearest 10 (1343 -> 1350, 15203551.58 ->
+   15203560). tokenizeMath already skips "()" entirely (never an empty
+   group), so detection here is a plain substring check independent of
+   tokenization. */
 function hasRoundMarker(s){ return s.indexOf('()')!==-1; }
+function applyRoundMarker(v){ return Math.ceil(v/10)*10; }
 
 /* Analyze the full document top-to-bottom, producing per-line results.
    Variables are scoped per "//" section: each section gets its own `scope`
@@ -1015,10 +1030,10 @@ function analyze(text){
     if(am){
       const name=am[1].trim().toLowerCase();
       if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
-        const rhs=am[2];
+        const rhs=am[3];
         const toks=tokenizeMath(rhs, vars);
         let v=evaluate(toks, scope, ctx);
-        if(v!==null && hasRoundMarker(rhs)) v=Math.round(v);
+        if(v!==null && (am[2]||hasRoundMarker(rhs))) v=applyRoundMarker(v);
         if(v!==null){ scope[name]=v; result=v; assignedName=name; }
         if(varDefLine[name]===undefined) varDefLine[name]=idx;
       }
@@ -1027,7 +1042,7 @@ function analyze(text){
     if(result===null && cls.kind!=='super' && cls.kind!=='header'){
       const toks=tokenizeMath(content, vars);
       result=evaluate(toks, scope, ctx);
-      if(result!==null && hasRoundMarker(content)) result=Math.round(result);
+      if(result!==null && hasRoundMarker(content)) result=applyRoundMarker(result);
     }
 
     // feed aggregation (skip boundary/heading lines)
@@ -1282,7 +1297,7 @@ const input=$('input'), highlight=$('highlight'),
       gutter=$('gutter'), results=$('results'), hotspots=$('hotspots'),
       stack=$('stack'), editor=$('editor'), ctxmenu=$('ctxmenu'),
       linemenu=$('linemenu'), toast=$('toast'), statusEl=$('status'),
-      searchlayer=$('searchlayer');
+      searchlayer=$('searchlayer'), pillhover=$('pillhover');
 
 const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text, name and
@@ -1380,6 +1395,14 @@ function spaceOpsContent(s){
     const ul=urlLenAt(s,i);
     if(ul){ out+=s.substr(i,ul); i+=ul-1; continue; }   // never pad operators inside a URL
     const ch=s[i];
+    if(ch==='(' && s[i+1]===')'){                       // "()" round-marker: pad like an operator
+      const lo=out.length?out[out.length-1]:'';
+      if(lo!=='' && !isFmtWS(lo) && lo!==' ' && lo!=='\t') out+=OSP;
+      out+='()';
+      const nx=s[i+2]||'';
+      if(nx!=='' && !isFmtWS(nx) && nx!==' ' && nx!=='\t') out+=OSP;
+      i++; continue;
+    }
     if('+-*/^='.includes(ch)){
       const lc=lastCore(), rc=nextCore(i+1);
       const isPM=(ch==='+'||ch==='-');
@@ -1429,6 +1452,7 @@ function render(){
   const text=input.value;
   const A=analyze(text);
   model={data:A, meta:[]};
+  hidePillHover();   // stale pixel geometry from before this render is worthless; next mousemove re-shows it correctly
 
   const n=A.lines.length;
 
@@ -2039,7 +2063,7 @@ function varPillRangesInLine(row){
     const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(name)+'(?![\\p{L}\\d_])','giu');
     let mt;
     while((mt=re.exec(raw))){
-      out.push({start:mt.index, end:mt.index+mt[0].length, name, value:scope[name]});
+      out.push({start:mt.index, end:mt.index+mt[0].length, name, text:mt[0], value:scope[name]});
       if(mt.index===re.lastIndex) re.lastIndex++;
     }
   }
@@ -2274,8 +2298,11 @@ function onStackCtx(e){
 /* Click on a link pill → open it in a new tab, no confirmation. The click also
    lands on the textarea underneath (placing a caret), which is harmless: links
    are atomic, so snapCaret bumps the caret to the pill edge.
-   A click on a variable pill copies its value instead (deferred briefly so a
-   dblclick can cancel it and enter edit mode there instead — see below). */
+   A click on a variable pill copies its NAME (as written, not lowercased)
+   instead — the value is already visible live in the results column
+   wherever the variable is used, so copying the name is the useful action
+   here (deferred briefly so a dblclick can cancel it and enter edit mode
+   there instead — see below). */
 let pillClickTimer=null;
 function onStackClick(e){
   const {row,col}=hitTest(e.clientX,e.clientY);
@@ -2283,9 +2310,8 @@ function onStackClick(e){
   if(rng){
     clearTimeout(pillClickTimer);
     pillClickTimer=setTimeout(()=>{
-      const v=plain(rng.value);
-      copyText(v);
-      showToast('Скопировано: '+v);
+      copyText(rng.text);
+      showToast('Скопировано: '+rng.text);
       input.focus();
       const off=lineColToOffset(row, rng.end);
       input.setSelectionRange(off,off);
@@ -2365,11 +2391,26 @@ function offsetToLineCol(pos){
   const row=before.split('\n').length-1;
   return {row, col:pos-lineStart};
 }
+/* Oval pill background behind a variable — shown ONLY while the mouse is
+   actually over it (hover-only affordance hinting it's clickable), never
+   persistent, unlike result/link pills which always look like pills. */
+function showPillHover(row, start, end){
+  const subRow=Math.floor(start/charsPerLine);
+  const colInRow=start-subRow*charsPerLine;
+  const top=lineRowTop[row]*LH + subRow*LH + 14;
+  const left=16 + colInRow*charW;
+  const width=(end-start)*charW;
+  pillhover.innerHTML='<div class="pill-hover-box" style="top:'+top+'px;left:'+left+'px;width:'+width+'px"></div>';
+}
+function hidePillHover(){ if(pillhover.innerHTML) pillhover.innerHTML=''; }
 function onStackMove(e){
   const {row,col}=hitTest(e.clientX,e.clientY);
   const n=model?model.data.lines.length:0;
   hoverRow=(row>=0&&row<n)?row:-1;
   srcRow=-1;
+  const pillRng=hoverRow>=0 ? varPillRangeAt(hoverRow,col) : null;
+  if(pillRng) showPillHover(hoverRow, pillRng.start, pillRng.end);
+  else hidePillHover();
   if(hoverRow>=0 && model.meta[hoverRow]){
     const meta=model.meta[hoverRow][col];
     if(meta){
@@ -2379,7 +2420,7 @@ function onStackMove(e){
   }
   setRowFx();
 }
-function onStackLeave(){ hoverRow=-1; srcRow=-1; setRowFx(); }
+function onStackLeave(){ hoverRow=-1; srcRow=-1; hidePillHover(); setRowFx(); }
 
 /* Highlight the source line when hovering a result pill. */
 function onResultHover(e){
