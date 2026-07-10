@@ -2800,11 +2800,12 @@ function onAuthChanged(user){
   if(user){
     $('authgate').style.display='none';
     $('authgate-status').textContent='';
-    statusEl.textContent=user.displayName||user.email||'';
+    // NB: no other UI to update here — the old top bar's #status (account
+    // name) is gone. A stray reference to it here used to throw BEFORE
+    // subscribeCloud(), silently killing cross-device sync after sign-in.
     subscribeCloud();
   }else{
     $('authgate').style.display='flex';
-    statusEl.textContent='';
     cloudReady=false; cloudRef=null;
     if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
   }
