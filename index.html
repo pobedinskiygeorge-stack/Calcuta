@@ -143,7 +143,7 @@ button{font-family:inherit;color:inherit}
 .bm-item .bm-ic{width:15px;flex:0 0 auto;opacity:.8}
 
 /* document tabs: Задачи · Личное · rest */
-.doc-tabs{display:flex;align-items:center;gap:4px;min-width:0;margin-left:4px}
+.doc-tabs{display:flex;align-items:center;gap:4px;min-width:0;margin-left:24px}
 .doc-tab{
   flex:0 0 auto;max-width:170px;padding:5px 11px;border-radius:8px;border:1px solid transparent;
   background:none;color:var(--dim);font-size:13px;font-family:var(--font-mono);cursor:pointer;
@@ -174,20 +174,18 @@ button{font-family:inherit;color:inherit}
 .tag-form input[type=text]:focus{border-color:var(--accent)}
 .swatch-btn{
   flex:0 0 auto;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);
-  cursor:pointer;padding:0;position:relative;
+  cursor:pointer;padding:0;position:relative;overflow:hidden;
 }
 .swatch-btn input{position:absolute;inset:0;opacity:0;cursor:pointer}
-.add-btn{
-  flex:0 0 auto;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);
-  background:var(--bg-editor);color:var(--text);cursor:pointer;font-size:18px;line-height:1;
-}
-.add-btn:hover{border-color:var(--accent);color:var(--accent)}
 .tag-list{display:flex;flex-direction:column;gap:6px}
 .tag-chip{
   display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;
   background:var(--bg-editor);border:1px solid var(--border-soft);
 }
-.tag-chip .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
+/* the colour dot doubles as a tap target to recolour an existing tag */
+.tag-chip .dot{width:15px;height:15px;border-radius:50%;flex:0 0 auto;position:relative;
+  cursor:pointer;border:1px solid rgba(128,128,128,.35)}
+.tag-chip .dot input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0}
 .tag-chip .label{flex:1 1 auto;font-size:13px;font-family:var(--font-mono);color:var(--text);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tag-chip .del{border:none;background:none;color:var(--dim);cursor:pointer;font-size:15px;padding:0 2px}
@@ -444,9 +442,16 @@ button{font-family:inherit;color:inherit}
      rest · + · поиск) fits without a horizontal scroll on phones. */
   .topbar{gap:5px;padding:0 8px}
   .brand-name{font-size:14px}
-  .doc-tabs{gap:3px;margin-left:2px}
+  .doc-tabs{gap:3px;margin-left:10px}
   .doc-tab{padding:5px 8px;max-width:120px}
-  :root{--results-w:104px;--gutter-w:44px}
+  /* Bigger, more legible scale on phones — fewer lines fit vertically, which
+     is the intended trade-off. font-size ≥16px also stops iOS from auto-
+     zooming when the editor is focused. Line numbers hug the left edge
+     (narrow gutter) without letting digits run off-screen. */
+  :root{--fs:16px;--lh:28px;--results-w:104px;--gutter-w:28px}
+  .gutter-line{padding-right:3px;font-size:12px}
+  /* no results-column drag on phones */
+  #results-resize{display:none}
 }
 
 /* ---------- auth gate (Google sign-in, shown before the app is usable) ---------- */
@@ -494,9 +499,8 @@ button{font-family:inherit;color:inherit}
           <div class="bm-sep"></div>
           <div class="bm-title">Тэги</div>
           <div class="tag-form">
-            <input id="tag-name" type="text" placeholder="имя тэга" maxlength="24" autocomplete="off">
+            <input id="tag-name" type="text" placeholder="имя тэга, ↵ — добавить" maxlength="24" autocomplete="off">
             <button class="swatch-btn" id="tag-swatch" title="цвет тэга"><input id="tag-color" type="color" value="#e0663f"></button>
-            <button class="add-btn" id="tag-add" title="добавить тэг">+</button>
           </div>
           <div class="tag-list" id="tag-list"></div>
 
@@ -1255,7 +1259,7 @@ function uid(){ return 'd'+Date.now().toString(36)+Math.random().toString(36).sl
 let model=null;            // last analyze() + per-line meta
 let selectedGutter=new Set();
 let charW=8.4;             // measured monospace char width
-const LH=24;                // px per visual row — must match --lh
+let LH=24;                  // px per visual row — kept in sync with --lh by measureChar()
 let charsPerLine=1;         // how many chars fit before a line wraps
 let lineRowTop=[], lineRowCount=[];   // per-source-line cumulative offset / row span (in LH units)
 
@@ -1278,6 +1282,10 @@ function measureChar(){
   charW=probe.getBoundingClientRect().width/10;
   probe.remove();
   window.__charW=charW;
+  // --lh can differ per breakpoint (bigger on phones); keep the JS row height
+  // that all pixel positions derive from in sync with the CSS value.
+  const lh=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--lh'));
+  if(lh>0) LH=lh;
 }
 
 /* ---------- number masking (live grouping) ---------- */
@@ -2197,7 +2205,8 @@ function renderTags(){
   const list=$('tag-list');
   if(!store.tags.length){ list.innerHTML='<p class="empty-hint">Добавь тэг — его текст будет подсвечен выбранным цветом (приоритет ниже переменных).</p>'; return; }
   list.innerHTML=store.tags.map((t,idx)=>
-    '<div class="tag-chip"><span class="dot" style="background:'+t.color+'"></span>'+
+    '<div class="tag-chip"><span class="dot" style="background:'+t.color+'" title="изменить цвет">'+
+    '<input type="color" class="tag-recolor" data-i="'+idx+'" value="'+t.color+'"></span>'+
     '<span class="label">'+esc(t.label)+'</span>'+
     '<button class="del" data-i="'+idx+'" title="удалить">×</button></div>').join('');
 }
@@ -2596,6 +2605,13 @@ function showToast(msg){
 
 /* ---------- resizable results column ---------- */
 function applyResultsWidth(w){
+  if(window.innerWidth<=720){
+    // phones have no drag handle: clear any stored inline width so the fixed
+    // width from the mobile media query governs instead.
+    document.documentElement.style.removeProperty('--results-w');
+    computeCharsPerLine();
+    return;
+  }
   w=Math.max(90, Math.min(560, w||150));
   document.documentElement.style.setProperty('--results-w', w+'px');
   computeCharsPerLine();
@@ -2991,8 +3007,14 @@ function boot(){
     if(!e.target.closest('#stack')&&!linemenu.contains(e.target)) closeLineMenu();
   });
 
-  $('tag-add').addEventListener('click', addTag);
+  // add a tag by pressing Enter (the "+" button is gone)
   $('tag-name').addEventListener('keydown', e=>{ if(e.key==='Enter') addTag(); });
+  // the new-tag swatch mirrors the chosen colour
+  const swatchInput=$('tag-color');
+  const paintSwatch=()=>{ $('tag-swatch').style.background=swatchInput.value; };
+  paintSwatch();
+  swatchInput.addEventListener('input', paintSwatch);
+  // tag list: delete via ×, recolour an existing tag via its colour dot
   $('tag-list').addEventListener('click', e=>{
     const del=e.target.closest('.del'); if(!del) return;
     const i=+del.dataset.i, t=store.tags[i]; if(!t) return;
@@ -3000,6 +3022,14 @@ function boot(){
     if(store.deletedTags) store.deletedTags[t.label.toLowerCase()]=now;   // tombstone so the delete syncs
     store.tags.splice(i,1); store.tagsUpdated=now; renderTags(); render(); scheduleSave();
   });
+  $('tag-list').addEventListener('input', e=>{
+    const rec=e.target.closest('.tag-recolor'); if(!rec) return;
+    const i=+rec.dataset.i, t=store.tags[i]; if(!t) return;
+    t.color=rec.value; t.updated=Date.now(); store.tagsUpdated=Date.now();
+    const dot=rec.parentElement; if(dot) dot.style.background=t.color;   // live preview, don't rebuild (keeps the picker open)
+    render(); scheduleSave();
+  });
+  $('tag-list').addEventListener('change', e=>{ if(e.target.closest('.tag-recolor')) renderTags(); });
 
   // theme + tags live in the calcuta dropdown; check-marks were set pre-paint
   applyTheme(currentTheme());
@@ -3073,7 +3103,7 @@ function boot(){
   // results column resize
   initResultsResize();
 
-  window.addEventListener('resize', ()=>{ measureChar(); computeCharsPerLine(); render(); });
+  window.addEventListener('resize', ()=>{ measureChar(); applyResultsWidth(store.resultsWidth); render(); });
 
   // keep gutter/results scrolled with editor vertical scroll is automatic (flex children)
 }
