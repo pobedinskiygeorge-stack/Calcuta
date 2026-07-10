@@ -944,7 +944,15 @@ function collectVarsBySection(lines, secOf){
    15203560). tokenizeMath already skips "()" entirely (never an empty
    group), so detection here is a plain substring check independent of
    tokenization. */
-function hasRoundMarker(s){ return s.indexOf('()')!==-1; }
+function hasRoundMarker(s){
+  // "()" inside a URL (site.com/path()) is link content, not a round marker —
+  // the tokenizer/formatter already skip URLs, so the round check must too.
+  if(s.indexOf('()')===-1) return false;
+  let t=s;
+  const rs=urlRanges(s);           // hoisted from [EDITOR]; same skip-set as tokenizeMath
+  if(rs.length){ let out='', prev=0; for(const r of rs){ out+=s.slice(prev,r.start); prev=r.end; } t=out+s.slice(prev); }
+  return t.indexOf('()')!==-1;
+}
 function applyRoundMarker(v){ return Math.ceil(v/10)*10; }
 
 /* Analyze the full document top-to-bottom, producing per-line results.
