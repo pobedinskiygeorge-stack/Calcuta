@@ -1411,17 +1411,39 @@ function render(){
 
   const n=A.lines.length;
 
-  // A wrapped source line spans several visual rows; precompute how many
-  // and the cumulative row offset of each line so the gutter/results columns
-  // (and anything positioned by row index) line back up with it.
+  // 1) Build and paint the highlight layer FIRST. Its real wrapped height per
+  //    line is the source of truth: a char-count prediction (ceil(len/cpl))
+  //    can't match the browser once the text contains no-break spaces —
+  //    grouped numbers ("1 800") and padded operators ("euro * наценка") —
+  //    which stop word-break:break-all from packing rows uniformly, so long
+  //    lines wrap into more rows than predicted and every column below drifts.
+  const activeTags=activeSpotlightTags(text, store.tags);
+  const activeDates=activeSpotlightDates(text);
+  let hl='';
+  for(let k=0;k<n;k++){
+    const lineSec=A.lines[k].section;
+    const built=buildLineHTML(A.lines[k], A.varsBySection[lineSec]||EMPTY_VARS, A.varDefLineBySection[lineSec]||EMPTY_OBJ, store.tags, activeTags, activeDates);
+    model.meta[k]=built.cmeta;
+    const spotStyle=built.spotlightColor? ' style="box-shadow:inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA)+'"'
+                   : built.dateSpotlight? ' style="box-shadow:inset 0 0 0 999px var(--date-spot)"' : '';
+    hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'"'+spotStyle+'>'+built.html+'</div>';
+  }
+  highlight.innerHTML=hl;
+
+  // 2) Measure each line's actual row span from the DOM (one reflow), then the
+  //    cumulative offsets. Every visual row is exactly LH tall (line-height:LH),
+  //    so offsetHeight/LH is the true row count.
   lineRowTop=new Array(n); lineRowCount=new Array(n);
+  const hlEls=highlight.children;
   let acc=0;
   for(let k=0;k<n;k++){
-    const rows=Math.max(1, Math.ceil(A.lines[k].raw.length/charsPerLine));
+    const el=hlEls[k];
+    const rows=el ? Math.max(1, Math.round(el.offsetHeight/LH)) : 1;
     lineRowTop[k]=acc; lineRowCount[k]=rows; acc+=rows;
   }
 
-  // gutter
+  // 3) Gutter, checkbox hotspots and results column — sized/positioned from the
+  //    measured rows so every column lines up with the wrapped text.
   let g='';
   for(let k=0;k<n;k++){
     const col=doc().lineColors[k];
@@ -1431,18 +1453,8 @@ function render(){
   }
   gutter.innerHTML=g;
 
-  // highlight + hotspots + results
-  const activeTags=activeSpotlightTags(text, store.tags);
-  const activeDates=activeSpotlightDates(text);
-  let hl='', hs='', rs='';
+  let hs='', rs='';
   for(let k=0;k<n;k++){
-    const lineSec=A.lines[k].section;
-    const built=buildLineHTML(A.lines[k], A.varsBySection[lineSec]||EMPTY_VARS, A.varDefLineBySection[lineSec]||EMPTY_OBJ, store.tags, activeTags, activeDates);
-    model.meta[k]=built.cmeta;
-    const spotStyle=built.spotlightColor? ' style="box-shadow:inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA)+'"'
-                   : built.dateSpotlight? ' style="box-shadow:inset 0 0 0 999px var(--date-spot)"' : '';
-    hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'"'+spotStyle+'>'+built.html+'</div>';
-
     const it=A.lines[k];
     const h=lineRowCount[k]*LH;
     if(it.cls.kind==='checkbox'){
@@ -1457,7 +1469,6 @@ function render(){
       rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px"></div>';
     }
   }
-  highlight.innerHTML=hl;
   hotspots.innerHTML=hs;
   results.innerHTML=rs;
 
@@ -1751,13 +1762,13 @@ function computeMatches(){
   else if(searchIdx<0||searchIdx>=searchMatches.length) searchIdx=0;
 }
 
-/* Pixel position of a {line,col} match, accounting for the line's own
-   wrapped sub-row (col can land past the first visual row of a long line). */
-function matchPos(m){
-  const subRow=Math.floor(m.col/charsPerLine), subCol=m.col%charsPerLine;
-  const top=(lineRowTop[m.line]||0)*LH + subRow*LH + 14;   // + padY
-  const left=subCol*charW + 16;                            // + padX
-  return {top, left, subCol};
+/* Stack-relative rects of a {line,col,len} match, measured from the rendered
+   text so marks land exactly — even on wrapped lines, where a match can span
+   two visual rows (one rect per fragment). */
+function matchRects(m){
+  const rects=charRangeRects(m.line, m.col, m.col+m.len);
+  const sb=stack.getBoundingClientRect();
+  return rects.map(r=>({top:r.top-sb.top+stack.scrollTop, left:r.left-sb.left+stack.scrollLeft, width:r.width, height:r.height}));
 }
 function renderSearch(){
   // marks
@@ -1765,11 +1776,10 @@ function renderSearch(){
   else{
     let html='';
     searchMatches.forEach((m,k)=>{
-      const {top,left,subCol}=matchPos(m);
-      const len=Math.min(m.len, charsPerLine-subCol);   // clip at the wrap edge, never bleed into the next row
-      const w=len*charW;
-      html+='<div class="search-mark'+(k===searchIdx?' active':'')+'" '
-        +'style="top:'+top+'px;left:'+left+'px;width:'+w+'px"></div>';
+      const cls='search-mark'+(k===searchIdx?' active':'');
+      for(const r of matchRects(m)){
+        html+='<div class="'+cls+'" style="top:'+r.top+'px;left:'+r.left+'px;width:'+r.width+'px;height:'+r.height+'px"></div>';
+      }
     });
     searchlayer.innerHTML=html;
     syncScroll();
@@ -1810,7 +1820,8 @@ function navigateSearch(dir){
 
 function scrollToMatch(){
   const m=searchMatches[searchIdx]; if(!m) return;
-  const {top}=matchPos(m);
+  const rects=matchRects(m); if(!rects.length) return;
+  const top=rects[0].top;
   const view=editor.clientHeight;
   if(top<editor.scrollTop+40 || top>editor.scrollTop+view-40){
     editor.scrollTop=Math.max(0, top-view/2);
@@ -2303,7 +2314,7 @@ function onStackCtx(e){
    there instead — see below). */
 let pillClickTimer=null;
 function onStackClick(e){
-  const {row,col}=hitTest(e.clientX,e.clientY);
+  const {row,col}=hitTestChar(e.clientX,e.clientY);
   const rng=varPillRangeAt(row,col);
   if(rng){
     clearTimeout(pillClickTimer);
@@ -2325,13 +2336,13 @@ function onStackClick(e){
    there (a plain click should only copy, not also start editing); click/
    dblclick above decide what actually happens. */
 function onStackMouseDown(e){
-  const {row,col}=hitTest(e.clientX,e.clientY);
+  const {row,col}=hitTestChar(e.clientX,e.clientY);
   if(varPillRangeAt(row,col)) e.preventDefault();
 }
 /* Double-click on a variable pill cancels the pending copy and places the
    caret at the exact double-click position instead, for normal editing. */
 function onStackDblClick(e){
-  const {row,col}=hitTest(e.clientX,e.clientY);
+  const {row,col}=hitTestChar(e.clientX,e.clientY);
   if(!varPillRangeAt(row,col)) return;
   clearTimeout(pillClickTimer);
   input.focus();
@@ -2391,20 +2402,90 @@ function offsetToLineCol(pos){
   const row=before.split('\n').length-1;
   return {row, col:pos-lineStart};
 }
+/* ---------- DOM-accurate character hit-testing ----------
+   charsPerLine math assumes every visual row packs exactly charsPerLine
+   characters, which is false whenever a line wraps at word boundaries or holds
+   no-break spaces (grouped numbers, padded operators). So for anything that
+   maps a POINT to a character or a CHARACTER RANGE to pixels, measure the real
+   rendered glyphs via Range rects. A line's highlight element renders its raw
+   text 1:1 (markers + body), so char indices line up. */
+function lineTextNodes(el){
+  const walker=document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes=[]; let node, total=0;
+  while((node=walker.nextNode())){ nodes.push({node, start:total, len:node.length}); total+=node.length; }
+  return {nodes, total};
+}
+function rangeForChars(nodes, start, end){
+  const rng=document.createRange();
+  let sSet=false, eSet=false;
+  for(const nd of nodes){ if(!sSet && start<=nd.start+nd.len){ rng.setStart(nd.node, Math.max(0,start-nd.start)); sSet=true; } if(end<=nd.start+nd.len){ rng.setEnd(nd.node, Math.max(0,end-nd.start)); eSet=true; break; } }
+  if(!sSet||!eSet){ const last=nodes[nodes.length-1]; if(last){ if(!sSet) rng.setStart(last.node,last.len); rng.setEnd(last.node,last.len); } }
+  return rng;
+}
+/* Exact character column at a viewport point, within source line `row`.
+   Glyph rects are only ~font-height tall, so there are leading gaps between
+   visual rows; classify the point into an exact LH band (the line box has no
+   gaps) first, then pick the nearest character within that band by x. */
+function charColInLine(row, clientX, clientY){
+  const el=highlight.children[row]; if(!el) return null;
+  const {nodes, total}=lineTextNodes(el); if(total===0) return 0;
+  const lineTop=el.getBoundingClientRect().top;
+  const rectAt=(i)=>rangeForChars(nodes, i, Math.min(i+1,total)).getBoundingClientRect();
+  const subOf=(r)=>Math.floor(((r.top+r.bottom)/2 - lineTop)/LH);
+  const targetSub=Math.max(0, Math.floor((clientY - lineTop)/LH));
+  let best=0, bestInBand=Infinity, bestAny=Infinity, bestAnyI=0, found=false;
+  for(let i=0;i<total;i++){
+    const r=rectAt(i);
+    const cx=r.left+r.width/2;
+    const sub=subOf(r);
+    if(sub===targetSub){ found=true; const d=Math.abs(clientX-cx); if(d<bestInBand){ bestInBand=d; best=i; } }
+    const any=Math.abs(sub-targetSub)*100000+Math.abs(clientX-cx);
+    if(any<bestAny){ bestAny=any; bestAnyI=i; }
+  }
+  if(!found) best=bestAnyI;
+  const rb=rectAt(best);
+  return (clientX > rb.left + rb.width/2) ? best+1 : best;
+}
+/* Like hitTest, but with an exact column (row already comes from measured
+   heights). Used by the tap/click/hover handlers that act on characters. */
+function hitTestChar(clientX, clientY){
+  const h=hitTest(clientX, clientY);
+  if(h.row<0 || h.row>=highlight.children.length) return h;
+  const col=charColInLine(h.row, clientX, clientY);
+  return {row:h.row, col: col==null?h.col:col};
+}
+/* Viewport rects of the character range [start,end) in source line `row`, one
+   per wrapped fragment, snapped to full LH row height (glyph rects are shorter
+   than the line box, so raw rects would leave gaps and sit a few px too low). */
+function charRangeRects(row, start, end){
+  const el=highlight.children[row]; if(!el) return [];
+  const {nodes, total}=lineTextNodes(el); if(total===0) return [];
+  start=Math.max(0,Math.min(start,total)); end=Math.max(start,Math.min(end,total));
+  const lineTop=el.getBoundingClientRect().top;
+  return [...rangeForChars(nodes, start, end).getClientRects()].map(r=>{
+    const sub=Math.round((r.top-lineTop)/LH);
+    return {left:r.left, top:lineTop+sub*LH, width:r.width, height:LH};
+  });
+}
+
 /* Oval pill background behind a variable — shown ONLY while the mouse is
    actually over it (hover-only affordance hinting it's clickable), never
    persistent, unlike result/link pills which always look like pills. */
 function showPillHover(row, start, end){
-  const subRow=Math.floor(start/charsPerLine);
-  const colInRow=start-subRow*charsPerLine;
-  const top=lineRowTop[row]*LH + subRow*LH + 14;
-  const left=16 + colInRow*charW;
-  const width=(end-start)*charW;
-  pillhover.innerHTML='<div class="pill-hover-box" style="top:'+top+'px;left:'+left+'px;width:'+width+'px"></div>';
+  const rects=charRangeRects(row, start, end);
+  if(!rects.length){ hidePillHover(); return; }
+  const sb=stack.getBoundingClientRect();
+  let html='';
+  for(const r of rects){
+    const top=r.top - sb.top + stack.scrollTop;
+    const left=r.left - sb.left + stack.scrollLeft;
+    html+='<div class="pill-hover-box" style="top:'+top+'px;left:'+left+'px;width:'+r.width+'px;height:'+r.height+'px"></div>';
+  }
+  pillhover.innerHTML=html;
 }
 function hidePillHover(){ if(pillhover.innerHTML) pillhover.innerHTML=''; }
 function onStackMove(e){
-  const {row,col}=hitTest(e.clientX,e.clientY);
+  const {row,col}=hitTestChar(e.clientX,e.clientY);
   const n=model?model.data.lines.length:0;
   hoverRow=(row>=0&&row<n)?row:-1;
   srcRow=-1;
