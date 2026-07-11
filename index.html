@@ -50,8 +50,6 @@
   --sel-text:#2a1400;      /* forced text color under selection (any syntax color stays readable) */
   --link:#6fb2f0;          /* URL pill */
   --scroll-thumb:#3a3630;
-  --pinned-tasks:#8b6fa8;  /* Задачи (subtle purple) */
-  --pinned-personal:#5a8db8; /* Личное (subtle blue) */
 
   --font-mono:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,'Liberation Mono',monospace;
   --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
@@ -95,8 +93,6 @@
   --sel-text:#2a1400;
   --link:#2b7fc4;
   --scroll-thumb:#cfc9bd;
-  --pinned-tasks:#9a7ba8;  /* Задачи (subtle purple) */
-  --pinned-personal:#5f8ab8; /* Личное (subtle blue) */
 }
 
 *{box-sizing:border-box}
@@ -142,26 +138,29 @@ button{font-family:inherit;color:inherit}
 .bm-item.active .bm-check{visibility:visible}
 .bm-item .bm-ic{width:15px;flex:0 0 auto;opacity:.8}
 
-/* document tabs: Задачи · Личное · rest */
+/* document tabs: Задачи · Личное · лупа. Tab names are plain white; the
+   open one is marked by the gray background alone. */
 .doc-tabs{display:flex;align-items:center;gap:4px;min-width:0;margin-left:24px}
 .doc-tab{
   flex:0 0 auto;max-width:170px;padding:5px 11px;border-radius:8px;border:1px solid transparent;
-  background:none;color:var(--dim);font-size:13px;font-family:var(--font-mono);cursor:pointer;
+  background:none;color:var(--text-strong);font-size:13px;font-family:var(--font-mono);cursor:pointer;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.doc-tab:hover{color:var(--text);background:var(--bg-editor)}
-.doc-tab.active{background:var(--bg-editor);border-color:var(--border);color:var(--text-strong)}
-#tab-tasks{color:var(--pinned-tasks)}       /* id beats .active, so pinned colour always wins */
-#tab-personal{color:var(--pinned-personal)}
-.rest-btn::after{content:"▾";font-size:9px;margin-left:6px;color:var(--dim);vertical-align:middle}
-.rest-menu{min-width:190px;max-width:min(320px,calc(100vw - 20px));max-height:62vh;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
-.tb-plus{font-size:18px;line-height:1}
-.docfind-menu{width:258px;max-width:calc(100vw - 20px)}
+.doc-tab:hover{background:var(--bg-editor)}
+.doc-tab.active{background:var(--bg-editor);border-color:var(--border)}
+/* the loupe popover: the whole document manager (search, create, list) */
+.docfind-menu{width:270px;max-width:calc(100vw - 20px)}
 .docfind-menu input{
   width:100%;background:var(--bg-editor);border:1px solid var(--border);border-radius:7px;
   color:var(--text);font-size:13px;padding:7px 9px;outline:none;margin-bottom:6px;
 }
 .docfind-menu input:focus{border-color:var(--accent)}
+.doc-add-row{
+  width:100%;text-align:left;padding:6px 9px;border-radius:7px;margin-bottom:6px;
+  border:1px dashed var(--border);background:none;color:var(--dim);cursor:pointer;
+  font-size:12.5px;font-family:var(--font-ui);
+}
+.doc-add-row:hover{border-color:var(--accent);color:var(--accent)}
 .docfind-list{display:flex;flex-direction:column;gap:2px;max-height:50vh;overflow-y:auto}
 .docfind-empty{font-size:12px;color:var(--dim);padding:6px 8px}
 
@@ -561,14 +560,10 @@ button{font-family:inherit;color:inherit}
         <button class="doc-tab" id="tab-tasks" data-id="stock-tasks" type="button">Задачи</button>
         <button class="doc-tab" id="tab-personal" data-id="stock-personal" type="button">Личное</button>
         <div class="tb-menu-wrap">
-          <button class="doc-tab rest-btn" id="rest-btn" type="button" aria-haspopup="true" aria-expanded="false">rest</button>
-          <div class="tb-menu rest-menu" id="rest-menu" role="menu" hidden></div>
-        </div>
-        <button class="icon-btn tb-plus" id="doc-add" type="button" title="новый документ">+</button>
-        <div class="tb-menu-wrap">
-          <button class="icon-btn" id="doc-find-btn" type="button" title="найти документ" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M10 4a6 6 0 014.47 10l4.26 4.26-1.42 1.42L13.04 15.4A6 6 0 1110 4zm0 2a4 4 0 100 8 4 4 0 000-8z"/></svg></button>
+          <button class="icon-btn" id="doc-find-btn" type="button" title="документы" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M10 4a6 6 0 014.47 10l4.26 4.26-1.42 1.42L13.04 15.4A6 6 0 1110 4zm0 2a4 4 0 100 8 4 4 0 000-8z"/></svg></button>
           <div class="tb-menu docfind-menu" id="docfind-menu" hidden>
             <input id="docfind-input" type="text" placeholder="найти документ…" autocomplete="off" spellcheck="false">
+            <button class="doc-add-row" id="doc-add" type="button">+ новый документ</button>
             <div class="docfind-list" id="docfind-list"></div>
           </div>
         </div>
@@ -1678,34 +1673,18 @@ function beginRename(id, nameEl){
   inp.addEventListener('click', e=>e.stopPropagation());
   inp.addEventListener('dblclick', e=>e.stopPropagation());
 }
-/* Update the whole top-bar doc UI: pinned button states, the rest button's
-   label (the open document's name when it's a non-pinned doc, else "rest")
-   and highlight, and the rest menu's list of non-pinned documents. */
+/* Update the top-bar doc UI: pinned button states + the loupe list. */
 function renderDocs(){
   const d=doc();
   const tt=$('tab-tasks'), tp=$('tab-personal');
   if(tt) tt.classList.toggle('active', !!d && d.protected==='tasks');
   if(tp) tp.classList.toggle('active', !!d && d.protected==='personal');
-
-  const rest=store.docs.filter(x=>!x.protected);
-  const activeRest = (d && !d.protected) ? d : null;
-  const rb=$('rest-btn');
-  if(rb){ rb.textContent = activeRest ? (activeRest.name||'Без названия') : 'rest'; rb.classList.toggle('active', !!activeRest); }
-
-  const menu=$('rest-menu');
-  if(menu){
-    if(!rest.length){ menu.innerHTML='<div class="docfind-empty">других документов нет</div>'; }
-    else menu.innerHTML=rest.map(x=>{
-      const active=x.id===store.activeId?' active':'';
-      return '<div class="doc-item'+active+'" data-id="'+x.id+'">'
-        +'<span class="doc-name">'+esc(x.name||'Без названия')+'</span>'
-        +'<button class="doc-del" data-id="'+x.id+'" title="удалить документ">×</button></div>';
-    }).join('');
-  }
   if(docFindOpen()) renderDocFind();
 }
 
-/* ---------- "find a document" popover (по имени/содержимому) ---------- */
+/* ---------- the loupe popover: the whole document manager ----------
+   Lists ALL documents (filtered by name/content while typing); click opens,
+   double-click renames inline, × deletes (stock pages have neither). */
 let docFindQuery='';
 function docFindOpen(){ const m=$('docfind-menu'); return m && !m.hidden; }
 function renderDocFind(){
@@ -1721,8 +1700,9 @@ function renderDocFind(){
     const active=d.id===store.activeId?' active':'';
     const cnt=q ? countMatches((d.id===store.activeId?input.value:(d.text||'')), q) : 0;
     const badge=cnt>0 ? '<span class="doc-badge">'+cnt+'</span>' : '';
+    const del=d.protected ? '' : '<button class="doc-del" data-id="'+d.id+'" title="удалить документ">×</button>';
     return '<div class="doc-item'+active+'" data-id="'+d.id+'">'
-      +'<span class="doc-name">'+esc(d.name||'Без названия')+'</span>'+badge+'</div>';
+      +'<span class="doc-name">'+esc(d.name||'Без названия')+'</span>'+badge+del+'</div>';
   }).join('');
 }
 
@@ -2246,8 +2226,8 @@ function addTag(){
    Only one is open at a time; a menu is anchored under its trigger and
    nudged left if it would overflow the right edge of the viewport. */
 let openMenuId=null;
-const MENU_IDS=['brand-menu','rest-menu','docfind-menu'];
-const MENU_BTNS={'brand-menu':'brand-btn','rest-menu':'rest-btn','docfind-menu':'doc-find-btn'};
+const MENU_IDS=['brand-menu','docfind-menu'];
+const MENU_BTNS={'brand-menu':'brand-btn','docfind-menu':'doc-find-btn'};
 function closeMenus(){
   MENU_IDS.forEach(id=>{ const m=$(id); if(m) m.hidden=true; });
   Object.values(MENU_BTNS).forEach(bid=>{ const b=$(bid); if(b) b.setAttribute('aria-expanded','false'); });
@@ -3124,9 +3104,8 @@ function boot(){
   // theme + tags live in the calcuta dropdown; check-marks were set pre-paint
   applyTheme(currentTheme());
 
-  // top-bar dropdown triggers (calcuta / rest / find document)
+  // top-bar dropdown triggers (calcuta / documents-loupe)
   $('brand-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('brand-menu'); });
-  $('rest-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('rest-menu'); });
   $('doc-find-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('docfind-menu'); });
   // theme choice inside the calcuta menu (menu stays open for further tweaks)
   $('brand-menu').addEventListener('click', e=>{
@@ -3135,36 +3114,32 @@ function boot(){
   // pinned document tabs
   $('tab-tasks').addEventListener('click', ()=>switchDoc(TASKS_ID));
   $('tab-personal').addEventListener('click', ()=>switchDoc(PERSONAL_ID));
-  // new document
+  // loupe popover = the document manager: search box, "+" creates, click on a
+  // row opens (deferred so a dblclick can rename instead), × deletes
   $('doc-add').addEventListener('click', createDoc);
-  // rest menu: single click opens (deferred so a dblclick can rename instead),
-  // × deletes, double-click on the name renames inline
-  let restClickTimer=null;
-  $('rest-menu').addEventListener('click', e=>{
-    const del=e.target.closest('.doc-del');
-    if(del){ e.stopPropagation(); clearTimeout(restClickTimer); requestDeleteDoc(del.dataset.id); return; }
-    const item=e.target.closest('.doc-item'); if(!item) return;
-    const id=item.dataset.id;
-    clearTimeout(restClickTimer);
-    restClickTimer=setTimeout(()=>switchDoc(id), 220);
-  });
-  $('rest-menu').addEventListener('dblclick', e=>{
-    const item=e.target.closest('.doc-item'); if(!item) return;
-    clearTimeout(restClickTimer);
-    const nameEl=item.querySelector('.doc-name'); if(nameEl) beginRename(item.dataset.id, nameEl);
-  });
-  // find-document popover (search by name / content across all documents)
   $('docfind-input').addEventListener('input', e=>{ docFindQuery=e.target.value; renderDocFind(); });
   $('docfind-input').addEventListener('keydown', e=>{
     if(e.key==='Enter'){ e.preventDefault(); const first=$('docfind-list').querySelector('.doc-item'); if(first) switchDoc(first.dataset.id); }
     else if(e.key==='Escape'){ e.preventDefault(); closeMenus(); }
   });
+  let docRowClickTimer=null;
   $('docfind-list').addEventListener('click', e=>{
-    const item=e.target.closest('.doc-item'); if(item) switchDoc(item.dataset.id);
+    const del=e.target.closest('.doc-del');
+    if(del){ e.stopPropagation(); clearTimeout(docRowClickTimer); requestDeleteDoc(del.dataset.id); return; }
+    if(e.target.closest('.doc-name-input')) return;   // typing a new name, not navigating
+    const item=e.target.closest('.doc-item'); if(!item) return;
+    const id=item.dataset.id;
+    clearTimeout(docRowClickTimer);
+    docRowClickTimer=setTimeout(()=>switchDoc(id), 220);
+  });
+  $('docfind-list').addEventListener('dblclick', e=>{
+    const item=e.target.closest('.doc-item'); if(!item) return;
+    clearTimeout(docRowClickTimer);
+    const nameEl=item.querySelector('.doc-name'); if(nameEl) beginRename(item.dataset.id, nameEl);
   });
   // close any open dropdown on outside click / Escape
   document.addEventListener('click', e=>{
-    if(openMenuId && !e.target.closest('.tb-menu') && !e.target.closest('#brand-btn,#rest-btn,#doc-find-btn')) closeMenus();
+    if(openMenuId && !e.target.closest('.tb-menu') && !e.target.closest('#brand-btn,#doc-find-btn')) closeMenus();
   });
   document.addEventListener('keydown', e=>{ if(e.key==='Escape' && openMenuId) closeMenus(); });
 
