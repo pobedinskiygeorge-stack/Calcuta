@@ -438,7 +438,7 @@ button{font-family:inherit;color:inherit}
 
 @media (max-width:720px){
   /* Tighten the top bar so the whole row (calcuta · Задачи · Личное ·
-     rest · + · поиск) fits without a horizontal scroll on phones. */
+     поиск) fits without a horizontal scroll on phones. */
   .topbar{gap:5px;padding:0 8px}
   .brand-name{font-size:14px}
   .doc-tabs{gap:3px;margin-left:10px}
@@ -451,6 +451,13 @@ button{font-family:inherit;color:inherit}
   .gutter-line{padding-right:3px;font-size:12px}
   /* no results-column drag on phones */
   #results-resize{display:none}
+  /* Every focusable text field must be ≥16px on iOS, otherwise Safari
+     auto-zooms the whole page when the field gains focus (the loupe search,
+     the tag-name box, inline document rename, and the Ctrl+F find field). */
+  .docfind-menu input,
+  .tag-form input[type=text],
+  .doc-item .doc-name-input,
+  #findbar input{font-size:16px}
 }
 
 /* ---------- auth gate (Google sign-in, shown before the app is usable) ---------- */
