@@ -2250,6 +2250,13 @@ function clampMenu(m){
   const over=r.right-(window.innerWidth-8);
   if(over>0) m.style.left=(-Math.ceil(over))+'px';
 }
+/* Touch device? matchMedia('(pointer:coarse)') alone misses some phones/
+   webviews (they report a fine primary pointer), so OR in hover:none and the
+   touch-points count. Used to skip auto-focusing search fields (which would
+   raise the keyboard) and to switch documents on the first tap. */
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches
+              || matchMedia('(hover: none)').matches
+              || (navigator.maxTouchPoints||0) > 0;
 function toggleMenu(id){
   if(openMenuId===id){ closeMenus(); return; }
   closeMenus();
@@ -2263,7 +2270,7 @@ function toggleMenu(id){
     // search field pops up the on-screen keyboard, and the first tap on a
     // document row then just dismisses the keyboard (the reflow eats that
     // tap), so the switch needed a second tap. Phones tap the field to search.
-    if(!matchMedia('(pointer: coarse)').matches){ i.focus(); i.select(); }
+    if(!IS_TOUCH){ i.focus(); i.select(); }
   }
 }
 
@@ -3140,11 +3147,35 @@ function boot(){
     if(e.key==='Enter'){ e.preventDefault(); const first=$('docfind-list').querySelector('.doc-item'); if(first) switchDoc(first.dataset.id); }
     else if(e.key==='Escape'){ e.preventDefault(); closeMenus(); }
   });
-  let docRowClickTimer=null;
+  // Row activation is split by input type so the FIRST tap always lands:
+  //   • touch → switch immediately on a stationary tap (touchend), before the
+  //     trailing synthetic click that a keyboard-dismiss reflow or the desktop
+  //     dblclick timer could otherwise swallow (that was the "needs two taps"
+  //     bug). A moved finger is a scroll, not a tap, so it's ignored.
+  //   • mouse → click switches, deferred briefly so a dblclick can rename.
+  let docRowClickTimer=null, touchHandledAt=0, tX=0, tY=0, tMoved=false;
+  $('docfind-list').addEventListener('touchstart', e=>{
+    const t=e.changedTouches[0]; tX=t.clientX; tY=t.clientY; tMoved=false;
+  }, {passive:true});
+  $('docfind-list').addEventListener('touchmove', e=>{
+    const t=e.changedTouches[0];
+    if(Math.abs(t.clientX-tX)>10 || Math.abs(t.clientY-tY)>10) tMoved=true;
+  }, {passive:true});
+  $('docfind-list').addEventListener('touchend', e=>{
+    if(tMoved) return;                                 // was a scroll, not a tap
+    if(e.target.closest('.doc-name-input')) return;    // typing a new name
+    const del=e.target.closest('.doc-del');
+    if(del){ e.preventDefault(); touchHandledAt=Date.now(); requestDeleteDoc(del.dataset.id); return; }
+    const item=e.target.closest('.doc-item'); if(!item) return;
+    e.preventDefault();                                // suppress the trailing synthetic click
+    touchHandledAt=Date.now();
+    switchDoc(item.dataset.id);                         // immediate — first tap opens
+  });
   $('docfind-list').addEventListener('click', e=>{
+    if(Date.now()-touchHandledAt < 700) return;        // touchend already handled this tap
     const del=e.target.closest('.doc-del');
     if(del){ e.stopPropagation(); clearTimeout(docRowClickTimer); requestDeleteDoc(del.dataset.id); return; }
-    if(e.target.closest('.doc-name-input')) return;   // typing a new name, not navigating
+    if(e.target.closest('.doc-name-input')) return;    // typing a new name, not navigating
     const item=e.target.closest('.doc-item'); if(!item) return;
     const id=item.dataset.id;
     clearTimeout(docRowClickTimer);
