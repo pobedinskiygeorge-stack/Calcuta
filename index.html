@@ -1852,7 +1852,7 @@ function transformDoubleplus(){
   // left untouched.
   const val=input.value;
   const caret=input.selectionStart;
-  const lineStart=val.lastIndexOf('\n',caret-1)+1;
+  const lineStart=caret>0 ? val.lastIndexOf('\n',caret-1)+1 : 0;
   const lineEnd=val.indexOf('\n',caret); const end=lineEnd===-1?val.length:lineEnd;
   const line=val.slice(lineStart,end);
 
@@ -1928,7 +1928,7 @@ function autoIndent(){
 /* Auto-insert a space after "//" on the caret line ("//text" → "// text"). */
 function transformSlashSpace(){
   const val=input.value, caret=input.selectionStart;
-  const lineStart=val.lastIndexOf('\n',caret-1)+1;
+  const lineStart=caret>0 ? val.lastIndexOf('\n',caret-1)+1 : 0;
   let lineEnd=val.indexOf('\n',caret); if(lineEnd<0) lineEnd=val.length;
   const line=val.slice(lineStart,lineEnd);
   const m=/^(\s*)\/\/(?=[^\/\s])/.exec(line);   // // immediately followed by a non-space, non-slash
@@ -1978,7 +1978,11 @@ function commitValue(newText, caret){
    non-indent character, so it "feels" like an ordinary un-indented line. */
 function lineBounds(pos){
   const v=input.value;
-  const lineStart=v.lastIndexOf('\n',pos-1)+1;
+  // pos===0 must yield lineStart 0. Guard it: lastIndexOf('\n', -1) clamps the
+  // fromIndex to 0 in JS, so when the first line is empty (v[0] is '\n') it
+  // wrongly reports the newline at 0 and puts the line start at 1 — which made
+  // snapCaret bump a caret on the empty first line down onto the second line.
+  const lineStart=pos>0 ? v.lastIndexOf('\n',pos-1)+1 : 0;
   let lineEnd=v.indexOf('\n',pos); if(lineEnd<0) lineEnd=v.length;
   const indentLen=(v.slice(lineStart,lineEnd).match(/^[ \t]*/)[0]).length;
   return {lineStart, indentLen, contentStart:lineStart+indentLen, lineEnd};
