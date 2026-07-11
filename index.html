@@ -2253,7 +2253,14 @@ function toggleMenu(id){
   m.hidden=false; openMenuId=id;
   const b=$(MENU_BTNS[id]); if(b) b.setAttribute('aria-expanded','true');
   clampMenu(m);
-  if(id==='docfind-menu'){ const i=$('docfind-input'); i.value=docFindQuery; renderDocFind(); i.focus(); i.select(); }
+  if(id==='docfind-menu'){
+    const i=$('docfind-input'); i.value=docFindQuery; renderDocFind();
+    // Only steal focus on devices with a real pointer. On touch, focusing the
+    // search field pops up the on-screen keyboard, and the first tap on a
+    // document row then just dismisses the keyboard (the reflow eats that
+    // tap), so the switch needed a second tap. Phones tap the field to search.
+    if(!matchMedia('(pointer: coarse)').matches){ i.focus(); i.select(); }
+  }
 }
 
 /* ---------- theme (dark / light) — device-local, not synced ---------- */
