@@ -36,6 +36,7 @@
   --var:#5ecb7e;           /* variables (green, richer than the old sage) — top priority */
   --pill-hover-bg:rgba(94,203,126,.18); /* oval bg behind a variable + usage pills */
   --super:#b98cf5;         /* supertask // (purple) */
+  --comment:#8f897c;       /* "#" comment lines: muted but readable gray */
   --super-soft:rgba(185,140,245,.16); /* pill bg behind a // heading */
   --date:#e3b755;          /* dates dd.mm (yellow) */
   --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
@@ -81,6 +82,7 @@
   --var:#2da44e;
   --pill-hover-bg:rgba(45,164,78,.15);
   --super:#7c4dd6;
+  --comment:#8e887b;
   --super-soft:rgba(124,77,214,.13);
   --date:#b07d10;
   --date-spot:rgba(176,125,16,.14);
@@ -345,7 +347,7 @@ button{font-family:inherit;color:inherit}
    box-decoration-break keeps the fill on every wrapped fragment. */
 #highlight .super-pill{background:var(--super-soft);box-shadow:0 0 0 3px var(--super-soft);
   border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
-#highlight .header{color:var(--dim);font-weight:600}
+#highlight .header{color:var(--comment)}
 #highlight .var{color:var(--var);font-weight:500}
 /* A USAGE of a variable is a label pill (same green as the hover oval);
    the defining occurrence (LHS of "name = ...") stays plain green - only the
@@ -574,6 +576,7 @@ button{font-family:inherit;color:inherit}
           <div class="ref-group">
             <div class="ref-h">Структура</div>
             <div class="row"><code>//</code><span class="desc">надзадача (фиолетовая), ниже — отступ</span></div>
+            <div class="row"><code># текст</code><span class="desc">комментарий — серый, в расчётах не участвует</span></div>
             <div class="row"><code>12.05</code><span class="desc">дата дд.мм (жёлтая)</span></div>
             <div class="row"><code>текст:</code><span class="desc">метка-ярлык (оранжевая)</span></div>
             <div class="row"><code>"цитата"</code><span class="desc">текст в кавычках (фиолетовый)</span></div>
@@ -1008,8 +1011,10 @@ function classify(line){
 /* Group 2 is an optional "()" round-marker between the name and "=" (e.g.
    "переменная () = 1000 * 1.25") - without it, "()" there would make the
    whole line fail to match at all (parens aren't in the name charset),
-   silently dropping the assignment and the name's highlighting with it. */
-const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?|#\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.+)$/u;
+   silently dropping the assignment and the name's highlighting with it.
+   NB: "#" is deliberately NOT in the prefix group - a "#" line is a code
+   comment and must never define a variable or touch math in any way. */
+const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.+)$/u;
 
 /* A "//" supertask line starts a brand-new variable-scope section (itself
    included); everything before the first "//" is section 0. Sections let
@@ -1085,8 +1090,10 @@ function analyze(text){
     const isBlank=line.trim()==='';
     let result=null, assignedName=null, calcRange=null;
 
-    // run boundary: blank line or heading resets the contiguous block
-    if(isBlank || cls.kind==='super' || cls.kind==='header'){ ctx.contig=[]; }
+    // run boundary: blank line or "//" heading resets the contiguous block.
+    // A "#" comment is transparent: it neither contributes nor breaks the
+    // run, so sum/avg/prev see straight through it.
+    if(isBlank || cls.kind==='super'){ ctx.contig=[]; }
 
     // assignment?
     const am=ASSIGN_RE.exec(line);
@@ -1233,7 +1240,8 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     }
   }
 
-  // ---- tags (custom colors) ----
+  // ---- tags (custom colors) ---- (never inside a "#" comment)
+  if(cls.kind!=='header')
   for(const tag of tags){
     if(!tag.label) continue;
     const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','giu');
@@ -1249,7 +1257,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   //      bare word. First match in tags order wins (rare multi-tag overlap
   //      case, kept simple). Independent of the char-painting loop above. ----
   let spotlightColor=null;
-  if(activeTags && activeTags.size){
+  if(activeTags && activeTags.size && cls.kind!=='header'){
     for(const tag of tags){
       if(!tag.label) continue;
       if(!activeTags.has(tag.label.toLowerCase())) continue;
@@ -1269,12 +1277,12 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   //      occurrence alone. Loses to tag spotlight (same priority order as
   //      the char-level highlight: tag > date). ----
   let dateSpotlight=false;
-  if(!spotlightColor && activeDates && activeDates.size){
+  if(!spotlightColor && activeDates && activeDates.size && cls.kind!=='header'){
     dateSpotlight = lineHasBareDate(raw, activeDates);
   }
 
-  // ---- variables (top priority) ----
-  if(vars.size){
+  // ---- variables (top priority) ---- (never inside a "#" comment)
+  if(vars.size && cls.kind!=='header'){
     // The LHS name of an assignment on THIS line is the variable's original
     // (its definition) - plain green, no pill. Every other occurrence is a
     // usage, rendered as a label pill (.varu).
@@ -2247,6 +2255,7 @@ function atomicRegions(){ return pillRegions().concat(urlRegions()); }
 function varPillRangesInLine(row){
   if(!model || !model.data.lines[row]) return [];
   const item=model.data.lines[row];
+  if(item.cls.kind==='header') return [];   // "#" comment: fully inert
   const scope=model.data.scopesBySection[item.section];
   const names=model.data.varsBySection[item.section];
   if(!scope || !names || !names.size) return [];
