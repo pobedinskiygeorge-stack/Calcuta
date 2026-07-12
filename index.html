@@ -33,8 +33,8 @@
   --dim-2:#4d4941;
   --accent:#c96442;        /* Claude clay */
   --accent-soft:rgba(201,100,66,.16);
-  --var:#4ed6c8;           /* variables (turquoise) — top priority */
-  --pill-hover-bg:rgba(78,214,200,.18); /* oval bg behind a variable + usage pills */
+  --var:#5ecb7e;           /* variables (green, richer than the old sage) — top priority */
+  --pill-hover-bg:rgba(94,203,126,.18); /* oval bg behind a variable + usage pills */
   --super:#b98cf5;         /* supertask // (purple) */
   --super-soft:rgba(185,140,245,.16); /* pill bg behind a // heading */
   --date:#e3b755;          /* dates dd.mm (yellow) */
@@ -78,8 +78,8 @@
   --dim-2:#bcb6aa;
   --accent:#c96442;
   --accent-soft:rgba(201,100,66,.15);
-  --var:#18a496;
-  --pill-hover-bg:rgba(24,164,150,.16);
+  --var:#2da44e;
+  --pill-hover-bg:rgba(45,164,78,.15);
   --super:#7c4dd6;
   --super-soft:rgba(124,77,214,.13);
   --date:#b07d10;
@@ -304,7 +304,10 @@ button{font-family:inherit;color:inherit}
   font-size:12px;cursor:pointer;position:relative;white-space:nowrap;
 }
 .gutter-line:hover{color:var(--text)}
-.gutter-line.selected{background:var(--accent-soft)}
+/* Selection must read even on a line that carries its own color: the tint
+   is an inline background, so selection paints ABOVE it via box-shadow
+   (accent bar + wash) - a different property that inline styles can't win. */
+.gutter-line.selected{box-shadow:inset 2px 0 0 var(--accent), inset 0 0 0 999px var(--accent-soft)}
 .gutter-line.src{color:var(--accent);font-weight:700}
 
 /* stack: layered highlight / textarea / hotspots. Height driven by in-flow
@@ -344,7 +347,7 @@ button{font-family:inherit;color:inherit}
   border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
 #highlight .header{color:var(--dim);font-weight:600}
 #highlight .var{color:var(--var);font-weight:500}
-/* A USAGE of a variable is a label pill (same turquoise as the hover oval);
+/* A USAGE of a variable is a label pill (same green as the hover oval);
    the defining occurrence (LHS of "name = ...") stays plain green - only the
    original is pill-less. Same no-layout-shift trick as .rpill. */
 #highlight .varu{background:var(--pill-hover-bg);box-shadow:0 0 0 2px var(--pill-hover-bg);border-radius:6px}
@@ -383,7 +386,7 @@ button{font-family:inherit;color:inherit}
 
 /* oval pill background behind a variable, shown ONLY while hovering it —
    sits behind #highlight's text (lower in the DOM, same z-index) so the
-   turquoise .var glyphs paint on top of it, not the other way round. */
+   green .var glyphs paint on top of it, not the other way round. */
 #pillhover{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none}
 .pill-hover-box{position:absolute;height:var(--lh);border-radius:7px;background:var(--pill-hover-bg)}
 
@@ -556,7 +559,7 @@ button{font-family:inherit;color:inherit}
           </div>
           <div class="ref-group">
             <div class="ref-h">Переменные</div>
-            <div class="row"><code>бюджет = 500k</code><span class="desc">бирюзовая, действует в своём разделе <code class="mini">//</code></span></div>
+            <div class="row"><code>бюджет = 500k</code><span class="desc">зелёная, действует в своём разделе <code class="mini">//</code></span></div>
             <div class="note">Использование переменной — в пилюле; наведение подсвечивает оригинал. Клик копирует имя, двойной — правит написание.</div>
           </div>
           <div class="ref-group">
@@ -2538,11 +2541,16 @@ function onStackClick(e){
   if(rng){
     clearTimeout(pillClickTimer);
     pillClickTimer=setTimeout(()=>{
+      // The caret intentionally stays exactly where it was: mousedown's
+      // preventDefault (below) already blocked the browser's own caret
+      // placement, and copying must not teleport the cursor to the pill.
+      // fallbackCopy() can steal focus to its temp textarea, so restore
+      // focus and the exact selection if the editor had them.
+      const hadFocus = document.activeElement===input;
+      const selS=input.selectionStart, selE=input.selectionEnd;
       copyText(rng.text);
       showToast('Скопировано: '+rng.text);
-      input.focus();
-      const off=lineColToOffset(row, rng.end);
-      input.setSelectionRange(off,off);
+      if(hadFocus){ input.focus({preventScroll:true}); input.setSelectionRange(selS,selE); }
     }, 260);
     return;
   }
@@ -2929,8 +2937,14 @@ function copyText(t){
   else fallbackCopy(t);
 }
 function fallbackCopy(t){
+  // The temp textarea steals focus via select(); give it back afterwards so
+  // a copy never visibly moves the user's caret (this path also runs LATE -
+  // as the async .catch of navigator.clipboard - so callers can't restore).
+  const prev=document.activeElement;
+  const ps=(prev&&prev.setSelectionRange)?[prev.selectionStart,prev.selectionEnd]:null;
   const ta=document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
   document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(e){} ta.remove();
+  if(prev&&prev.focus){ prev.focus({preventScroll:true}); if(ps) try{ prev.setSelectionRange(ps[0],ps[1]); }catch(e){} }
 }
 let toastTimer=null;
 function showToast(msg){
