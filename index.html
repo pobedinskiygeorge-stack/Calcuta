@@ -167,17 +167,24 @@ button{font-family:inherit;color:inherit}
 .doc-tab.placeholder{color:var(--dim)}
 /* the loupe popover: the whole document manager (search, create, list) */
 .docfind-menu{width:270px;max-width:calc(100vw - 20px)}
+/* one control row: loupe smoothly unfolds the search box, "+" creates */
+.docfind-bar{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.docfind-bar .icon-btn{border:1px solid var(--border)}
 .docfind-menu input{
-  width:100%;background:var(--bg-editor);border:1px solid var(--border);border-radius:7px;
-  color:var(--text);font-size:13px;padding:7px 9px;outline:none;margin-bottom:6px;
+  width:0;opacity:0;padding:7px 0;border:1px solid transparent;
+  flex:0 1 auto;min-width:0;background:var(--bg-editor);border-radius:7px;
+  color:var(--text);font-size:13px;outline:none;
+  transition:width .18s ease,opacity .18s ease,padding .18s ease;
 }
-.docfind-menu input:focus{border-color:var(--accent)}
+.docfind-bar.open input{width:170px;opacity:1;padding:7px 9px;border-color:var(--border)}
+.docfind-bar.open input:focus{border-color:var(--accent)}
 .doc-add-row{
-  width:100%;text-align:left;padding:6px 9px;border-radius:7px;margin-bottom:6px;
+  flex:0 0 auto;width:30px;height:30px;margin-left:auto;padding:0;border-radius:7px;
   border:1px dashed var(--border);background:none;color:var(--dim);cursor:pointer;
-  font-size:12.5px;font-family:var(--font-ui);
+  font-size:17px;line-height:1;font-family:var(--font-ui);
 }
 .doc-add-row:hover{border-color:var(--accent);color:var(--accent)}
+#pinned-tabs{display:contents}
 .docfind-list{display:flex;flex-direction:column;gap:2px;max-height:50vh;overflow-y:auto}
 .docfind-empty{font-size:12px;color:var(--dim);padding:6px 8px}
 
@@ -609,11 +616,17 @@ button{font-family:inherit;color:inherit}
       <div class="doc-tabs" id="doc-tabs">
         <button class="doc-tab" id="tab-tasks" data-id="stock-tasks" type="button">Задачи</button>
         <button class="doc-tab" id="tab-personal" data-id="stock-personal" type="button">Личное</button>
+        <span id="pinned-tabs"></span>
         <div class="tb-menu-wrap">
           <button class="doc-tab" id="doc-find-btn" type="button" title="документы" aria-haspopup="true" aria-expanded="false">документы</button>
           <div class="tb-menu docfind-menu" id="docfind-menu" hidden>
-            <input id="docfind-input" type="text" placeholder="найти документ…" autocomplete="off" spellcheck="false">
-            <button class="doc-add-row" id="doc-add" type="button">+ новый документ</button>
+            <div class="docfind-bar" id="docfind-bar">
+              <button class="icon-btn" id="docfind-loupe" type="button" title="найти документ" aria-label="найти документ">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 4a6 6 0 014.47 10l4.26 4.26-1.42 1.42L13.04 15.4A6 6 0 1110 4zm0 2a4 4 0 100 8 4 4 0 000-8z"/></svg>
+              </button>
+              <input id="docfind-input" type="text" placeholder="найти документ…" autocomplete="off" spellcheck="false">
+              <button class="doc-add-row" id="doc-add" type="button" title="новый документ" aria-label="новый документ">+</button>
+            </div>
             <div class="docfind-list" id="docfind-list"></div>
           </div>
         </div>
@@ -652,6 +665,7 @@ button{font-family:inherit;color:inherit}
   <button class="lm-item danger" data-act="delete">Удалить строку</button>
 </div>
 <div id="docmenu">
+  <button class="lm-item" data-act="pin">Закрепить</button>
   <button class="lm-item" data-act="rename">Переименовать</button>
   <button class="lm-item danger" data-act="delete">Удалить документ</button>
 </div>
@@ -1481,7 +1495,7 @@ const input=$('input'), highlight=$('highlight'),
 const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text, name and
    line-number colors live per document. */
-let store={ docs:[], activeId:null, tags:[], tagsUpdated:0, deletedDocs:{}, deletedTags:{} };
+let store={ docs:[], activeId:null, tags:[], tagsUpdated:0, deletedDocs:{}, deletedTags:{}, pinned:[] };
 function doc(){ return store.docs.find(d=>d.id===store.activeId) || store.docs[0]; }
 function uid(){ return 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 let model=null;            // last analyze() + per-line meta
@@ -1687,7 +1701,7 @@ function render(){
     const sel=selectedGutter.has(k)?' selected':'';
     const h=lineRowCount[k]*LH;
     g+='<div class="gutter-line'+sel+'" data-i="'+k+'" style="height:'+h+'px'
-      +(col?';color:'+col+';background:'+hexToRgba(col,LINE_TINT_ALPHA):'')+'">'+(k+1)+'</div>';
+      +(col?';color:'+col:'')+'">'+(k+1)+'</div>';
   }
   gutter.innerHTML=g;
   selRangeLines=[-9,-9]; selectionGutterSync();   // re-mark selected-range numbers on the fresh cells
@@ -1702,12 +1716,10 @@ function render(){
       hs+='<div class="cbox-hit" data-i="'+k+'" style="top:'+top+'px;left:'+left+'px"></div>';
     }
     if(it.result!==null){
-      const rbg=lineCols[k]? ';background:'+hexToRgba(lineCols[k],LINE_TINT_ALPHA) : '';
-      rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'" style="height:'+h+'px'+rbg+'">'
+      rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'" style="height:'+h+'px">'
         +'<span class="pill">'+esc(fmt(it.result))+'</span></div>';
     }else{
-      const rbg=lineCols[k]? ';background:'+hexToRgba(lineCols[k],LINE_TINT_ALPHA) : '';
-      rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px'+rbg+'"></div>';
+      rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px"></div>';
     }
   }
   hotspots.innerHTML=hs;
@@ -1810,6 +1822,7 @@ function load(){
   if(typeof store.tagsUpdated!=='number') store.tagsUpdated=0;
   if(!store.deletedDocs || typeof store.deletedDocs!=='object') store.deletedDocs={};
   if(!store.deletedTags || typeof store.deletedTags!=='object') store.deletedTags={};
+  if(!Array.isArray(store.pinned)) store.pinned=[];
   // give every tag a per-tag timestamp (older stores had none) so tags merge
   // per-item across devices instead of whole-list last-write-wins.
   store.tags.forEach(t=>{ if(typeof t.updated!=='number') t.updated = store.tagsUpdated||1; });
@@ -1918,15 +1931,40 @@ function beginRename(id, nameEl){
   inp.addEventListener('click', e=>e.stopPropagation());
   inp.addEventListener('dblclick', e=>e.stopPropagation());
 }
+/* Pinned user docs (max 2, device-local): sanitize against deleted ids. */
+function pinnedIds(){
+  store.pinned=(store.pinned||[]).filter(id=>store.docs.some(d=>d.id===id && !d.protected)).slice(0,2);
+  return store.pinned;
+}
+function togglePin(id){
+  pinnedIds();
+  const i=store.pinned.indexOf(id);
+  if(i>=0) store.pinned.splice(i,1);
+  else{
+    if(store.pinned.length>=2){ showToast('Можно закрепить не более двух документов'); return; }
+    store.pinned.push(id);
+  }
+  renderDocs(); if(docFindOpen()) renderDocFind(); scheduleSave();
+}
+
 /* Update the top-bar doc UI: pinned button states, the third slot's label
    (open non-pinned doc's name, or a dim placeholder), and the open list. */
 function renderDocs(){
   const d=doc();
-  const tt=$('tab-tasks'), tp=$('tab-personal'), fb=$('doc-find-btn');
+  const tt=$('tab-tasks'), tp=$('tab-personal'), fb=$('doc-find-btn'), pt=$('pinned-tabs');
   if(tt) tt.classList.toggle('active', !!d && d.protected==='tasks');
   if(tp) tp.classList.toggle('active', !!d && d.protected==='personal');
+  if(pt){
+    pt.innerHTML=pinnedIds().map(id=>{
+      const p=store.docs.find(v=>v.id===id);
+      const act=(d && d.id===id)?' active':'';
+      return '<button class="doc-tab pinned'+act+'" data-id="'+id+'" type="button">'+esc(p.name||'Без названия')+'</button>';
+    }).join('');
+  }
   if(fb){
-    const other=(d && !d.protected) ? d : null;
+    // pinned docs have their own tab - the third slot only names an
+    // UNPINNED user doc, otherwise it's the dim manager placeholder
+    const other=(d && !d.protected && !store.pinned.includes(d.id)) ? d : null;
     fb.textContent=other ? (other.name||'Без названия') : 'документы';
     fb.classList.toggle('active', !!other);
     fb.classList.toggle('placeholder', !other);
@@ -1943,7 +1981,9 @@ function docFindOpen(){ const m=$('docfind-menu'); return m && !m.hidden; }
 function renderDocFind(){
   const list=$('docfind-list'); if(!list) return;
   const q=docFindQuery.trim().toLowerCase();
+  pinnedIds();
   const items=store.docs.filter(d=>{
+    if(d.protected || store.pinned.includes(d.id)) return false;   // already in the tabs
     if(!q) return true;
     if((d.name||'').toLowerCase().includes(q)) return true;
     return countMatches((d.id===store.activeId?input.value:(d.text||'')), q)>0;
@@ -2306,12 +2346,18 @@ function varPillRangesInLine(row){
   if(!scope || !names || !names.size) return [];
   const eligible=[...names].filter(n=>scope[n]!==undefined).sort((a,b)=>b.length-a.length);
   const raw=item.raw, out=[];
+  // the LHS of an assignment on this line is the variable's DEFINITION -
+  // it edits char-by-char, unlike usages (same rule as buildLineHTML)
+  let defName=null, defStart=-1;
+  const am=ASSIGN_RE.exec(raw);
+  if(am){ defName=am[1].trim().toLowerCase(); defStart=raw.indexOf(am[1]); }
   for(const name of eligible){
     const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(name)+'(?![\\p{L}\\d_])','giu');
     let mt;
     while((mt=re.exec(raw))){
       if(cmt<0 || mt.index<cmt)
-        out.push({start:mt.index, end:mt.index+mt[0].length, name, text:mt[0], value:scope[name]});
+        out.push({start:mt.index, end:mt.index+mt[0].length, name, text:mt[0], value:scope[name],
+                  def: name===defName && mt.index===defStart});
       if(mt.index===re.lastIndex) re.lastIndex++;
     }
   }
@@ -2319,6 +2365,21 @@ function varPillRangesInLine(row){
 }
 function varPillRangeAt(row, col){
   return varPillRangesInLine(row).find(r=>col>=r.start && col<r.end) || null;
+}
+/* A variable POINTER hit counts only on its glyphs: hitTestChar's column
+   snap happily resolves clicks in the empty wrap gap after a fragment of a
+   long name (or after the line's value) into the name's range - verify the
+   pointer really sits inside one of the rendered fragment rects
+   (charRangeRects returns one per wrapped fragment, snapped to row height).
+   Everywhere else the tap is ordinary caret placement - which is also what
+   makes a definition editable from its end: click right after the last
+   glyph, get a caret, Backspace eats one char at a time. */
+function varPillHit(row, col, clientX, clientY){
+  const rng=varPillRangeAt(row,col);
+  if(!rng) return null;
+  const ok=charRangeRects(row, rng.start, rng.end).some(r=>
+    clientX>=r.left && clientX<=r.left+r.width && clientY>=r.top && clientY<=r.top+r.height);
+  return ok ? rng : null;
 }
 /* A backward delete boundary must never land inside a pill — word/char
    backspace would otherwise chop it (e.g. wipe its digits but leave the
@@ -2377,13 +2438,15 @@ function onEditorKeydown(e){
     }
   }
 
-  // variable pills: unlike result pills/links the caret CAN enter them (a
-  // double-click places it inside for normal editing), but a plain Backspace
-  // sitting exactly at the right edge erases the whole name in one press.
+  // variable USAGE pills: unlike result pills/links the caret CAN enter them
+  // (a double-click places it inside for normal editing), but a plain
+  // Backspace sitting exactly at the right edge erases the whole label in
+  // one press. The DEFINITION is exempt: where the variable is originally
+  // set it must edit like plain text, one character at a time.
   if(e.key==='Backspace' && !e.shiftKey && collapsed && !(e.ctrlKey||e.altKey||e.metaKey)){
     const pos=input.selectionStart, {row,col}=offsetToLineCol(pos);
     const rng=varPillRangeAt(row, col-1);
-    if(rng && rng.end===col){
+    if(rng && !rng.def && rng.end===col){
       e.preventDefault();
       const v=input.value, lineStart=pos-col;
       const from=lineStart+rng.start, to=lineStart+rng.end;
@@ -2522,11 +2585,11 @@ function toggleMenu(id){
   clampMenu(m);
   if(id==='docfind-menu'){
     const i=$('docfind-input'); i.value=docFindQuery; renderDocFind();
-    // Only steal focus on devices with a real pointer. On touch, focusing the
-    // search field pops up the on-screen keyboard, and the first tap on a
-    // document row then just dismisses the keyboard (the reflow eats that
-    // tap), so the switch needed a second tap. Phones tap the field to search.
-    if(!IS_TOUCH){ i.focus(); i.select(); }
+    // The search box lives folded behind the loupe; it only starts open when
+    // a query is already active. Focus is taken ONLY by an explicit loupe
+    // tap (see the loupe handler) - never on menu open, so the first tap on
+    // a row always lands (no on-screen-keyboard reflow to eat it).
+    $('docfind-bar').classList.toggle('open', !!docFindQuery.trim());
   }
 }
 
@@ -2567,8 +2630,10 @@ function closeLineMenu(){ linemenu.classList.remove('open'); lineMenuTarget=-1; 
 let docMenuTarget=null;
 function openDocMenu(x,y,id){
   const d=store.docs.find(v=>v.id===id);
-  if(!d || d.protected) return;               // pinned docs can't be renamed/deleted
+  if(!d || d.protected) return;               // stock pages have no menu
   docMenuTarget=id;
+  const pinBtn=docmenu.querySelector('[data-act="pin"]');
+  if(pinBtn) pinBtn.textContent=(store.pinned||[]).includes(id)?'Открепить':'Закрепить';
   docmenu.style.left=Math.min(x, window.innerWidth-176)+'px';
   docmenu.style.top=Math.min(y, window.innerHeight-96)+'px';
   docmenu.classList.add('open');
@@ -2595,7 +2660,7 @@ function onStackCtx(e){
 let pillClickTimer=null;
 function onStackClick(e){
   const {row,col}=hitTestChar(e.clientX,e.clientY);
-  const rng=varPillRangeAt(row,col);
+  const rng=varPillHit(row,col,e.clientX,e.clientY);
   if(rng){
     clearTimeout(pillClickTimer);
     pillClickTimer=setTimeout(()=>{
@@ -2622,13 +2687,13 @@ function onStackClick(e){
    dblclick above decide what actually happens. */
 function onStackMouseDown(e){
   const {row,col}=hitTestChar(e.clientX,e.clientY);
-  if(varPillRangeAt(row,col)) e.preventDefault();
+  if(varPillHit(row,col,e.clientX,e.clientY)) e.preventDefault();
 }
 /* Double-click on a variable pill cancels the pending copy and places the
    caret at the exact double-click position instead, for normal editing. */
 function onStackDblClick(e){
   const {row,col}=hitTestChar(e.clientX,e.clientY);
-  if(!varPillRangeAt(row,col)) return;
+  if(!varPillHit(row,col,e.clientX,e.clientY)) return;
   clearTimeout(pillClickTimer);
   input.focus();
   const off=lineColToOffset(row,col);
@@ -2790,7 +2855,7 @@ function onStackMove(e){
   const n=model?model.data.lines.length:0;
   hoverRow=(row>=0&&row<n)?row:-1;
   srcRow=-1;
-  const pillRng=hoverRow>=0 ? varPillRangeAt(hoverRow,col) : null;
+  const pillRng=hoverRow>=0 ? varPillHit(hoverRow,col,e.clientX,e.clientY) : null;
   if(pillRng){
     // Hovering ANY occurrence of a variable lights up the ORIGINAL's pill
     // (the definition), so a usage always points back to where it was set.
@@ -3303,6 +3368,7 @@ function parseRemote(raw){
 function adoptMerged(merged){
   merged.activeId=store.activeId;
   merged.resultsWidth=store.resultsWidth;
+  merged.pinned=store.pinned;                 // pins are device-local, like activeId
   merged.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; });
   if(!merged.tags) merged.tags=[];
   if(!merged.deletedTags || typeof merged.deletedTags!=='object') merged.deletedTags={};
@@ -3484,7 +3550,7 @@ function boot(){
   document.addEventListener('contextmenu', e=>{
     if(!e.target.closest('#gutter')&&!ctxmenu.contains(e.target)) closeCtxMenu();
     if(!e.target.closest('#stack')&&!linemenu.contains(e.target)) closeLineMenu();
-    if(!e.target.closest('#docfind-list')&&!docmenu.contains(e.target)) closeDocMenu();
+    if(!e.target.closest('#docfind-list')&&!e.target.closest('#pinned-tabs')&&!docmenu.contains(e.target)) closeDocMenu();
   });
 
   // add a tag by pressing Enter (the "+" button is gone)
@@ -3527,6 +3593,57 @@ function boot(){
   // loupe popover = the document manager: search box, "+" creates, click on a
   // row opens (deferred so a dblclick can rename instead), × deletes
   $('doc-add').addEventListener('click', createDoc);
+  // loupe unfolds the search box (explicit tap = explicit intent to type)
+  $('docfind-loupe').addEventListener('click', ()=>{
+    const bar=$('docfind-bar'), i=$('docfind-input');
+    if(bar.classList.contains('open') && !i.value.trim()){ bar.classList.remove('open'); return; }
+    bar.classList.add('open');
+    i.focus();
+  });
+  // an emptied search box folds back behind the loupe when it loses focus
+  $('docfind-input').addEventListener('blur', ()=>{
+    if(!$('docfind-input').value.trim()) $('docfind-bar').classList.remove('open');
+  });
+  // pinned tabs: tap switches, right-click / long-press opens the doc menu
+  $('pinned-tabs').addEventListener('click', e=>{
+    if(Date.now()-pinTabTouchAt < 700) return;          // touchend already handled
+    if(e.target.closest('.doc-name-input')) return;     // inline rename in progress
+    const t=e.target.closest('.doc-tab'); if(t) switchDoc(t.dataset.id);
+  });
+  $('pinned-tabs').addEventListener('contextmenu', e=>{
+    const t=e.target.closest('.doc-tab'); if(!t) return;
+    e.preventDefault();
+    openDocMenu(e.clientX, e.clientY, t.dataset.id);
+  });
+  let pinHoldTimer=null, pinHoldFired=false, pinX=0, pinY=0, pinMoved=false, pinTabTouchAt=0;
+  const cancelPinHold=()=>{ if(pinHoldTimer){ clearTimeout(pinHoldTimer); pinHoldTimer=null; } };
+  $('pinned-tabs').addEventListener('touchstart', e=>{
+    const t=e.changedTouches[0]; pinX=t.clientX; pinY=t.clientY; pinMoved=false; pinHoldFired=false;
+    cancelPinHold();
+    const tab=e.target.closest('.doc-tab');
+    if(tab && e.touches.length===1){
+      const id=tab.dataset.id;
+      pinHoldTimer=setTimeout(()=>{
+        pinHoldTimer=null; pinHoldFired=true;
+        openDocMenu(pinX, pinY, id);
+        if(navigator.vibrate){ try{ navigator.vibrate(12); }catch(err){} }
+      }, 480);
+    }
+  }, {passive:true});
+  $('pinned-tabs').addEventListener('touchmove', e=>{
+    const t=e.changedTouches[0];
+    if(Math.abs(t.clientX-pinX)>10 || Math.abs(t.clientY-pinY)>10){ pinMoved=true; cancelPinHold(); }
+  }, {passive:true});
+  $('pinned-tabs').addEventListener('touchend', e=>{
+    cancelPinHold();
+    if(pinHoldFired){ e.preventDefault(); return; }
+    if(pinMoved) return;
+    if(e.target.closest('.doc-name-input')) return;
+    const tab=e.target.closest('.doc-tab'); if(!tab) return;
+    e.preventDefault();
+    pinTabTouchAt=Date.now();
+    switchDoc(tab.dataset.id);
+  });
   $('docfind-input').addEventListener('input', e=>{ docFindQuery=e.target.value; renderDocFind(); });
   $('docfind-input').addEventListener('keydown', e=>{
     if(e.key==='Enter'){ e.preventDefault(); const first=$('docfind-list').querySelector('.doc-item'); if(first) switchDoc(first.dataset.id); }
@@ -3583,10 +3700,14 @@ function boot(){
     const id=docMenuTarget; closeDocMenu();
     if(!id) return;
     if(btn.dataset.act==='rename'){
-      const nameEl=document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name');
+      // a pinned doc has no list row - rename right on its tab instead
+      const nameEl=document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name')
+                || document.querySelector('#pinned-tabs .doc-tab[data-id="'+id+'"]');
       if(nameEl) beginRename(id, nameEl);
     } else if(btn.dataset.act==='delete'){
       requestDeleteDoc(id);
+    } else if(btn.dataset.act==='pin'){
+      togglePin(id);
     }
   });
   // close any open dropdown on outside click / Escape
