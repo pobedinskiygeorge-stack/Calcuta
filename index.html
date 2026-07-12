@@ -1653,6 +1653,13 @@ function loadActiveIntoEditor(){
   selectedGutter.clear();
   autoIndent();
   applyMask();
+  // Formatting (auto-indent / number masking) may canonicalize the text right
+  // here. Write it back WITHOUT bumping `updated`: formatting is not an edit.
+  // The debounced persist() used to see the diff and stamp Date.now() — which
+  // made a freshly-seeded device's STOCK "Задачи" look newer than the user's
+  // real cloud copy and silently clobber it on every new device / cleared
+  // browser. That was the "documents don't sync between devices" failure.
+  if(d && d.text!==input.value) d.text=input.value;
   render();
   renderDocs();
 }
@@ -1994,7 +2001,9 @@ function onInput(){
   applyMask();
   onChange();
 }
+let lastEditAt=0;   // when the user last actually typed (gates remote adoption)
 function onChange(){
+  lastEditAt=Date.now();
   // Keep the active doc's text in sync with the editor SYNCHRONOUSLY on every
   // change (not only in the debounced persist()) so store is never stale
   // relative to what's on screen. Otherwise a cloud snapshot arriving in the
@@ -3046,20 +3055,40 @@ function adoptMerged(merged){
   if(!merged.docs.length) merged.docs.push(makeTasksDoc());          // never end up doc-less
   if(!merged.docs.some(d=>d.id===merged.activeId)) merged.activeId=merged.docs[0].id;
 
-  const editing=(document.activeElement===input);
+  // Protect the open doc from an incoming overwrite ONLY while the user is
+  // actually typing (recent edit + focus). Mere focus used to freeze the doc
+  // forever — on phones the textarea keeps focus indefinitely, so an idle
+  // device never showed edits made elsewhere, and its next keystroke pushed
+  // the stale text back over them.
+  // If the active doc vanished remotely (deleted elsewhere), merged.activeId
+  // now points at a FALLBACK doc. The editing branch below must then be dead:
+  // it writes input.value (the DELETED doc's text!) into whatever doc it finds
+  // under merged.activeId — i.e. straight into the fallback, corrupting it.
+  const activeVanished = (merged.activeId !== store.activeId);
+  let editing = !activeVanished && (document.activeElement===input) && (Date.now()-lastEditAt < 4000);
+  let suppressed=false;
   if(editing){
-    // keep the in-editor text/edit-time for the doc under the cursor; other
-    // docs and metadata still update live. The user's next save re-uploads it.
     const cur=store.docs.find(d=>d.id===merged.activeId);
     const inc=merged.docs.find(d=>d.id===merged.activeId);
-    if(cur && inc){ inc.text=input.value; inc.updated=cur.updated; }
+    // keep the in-editor text/edit-time for the doc under the cursor; other
+    // docs and metadata still update live. The user's next save re-uploads it.
+    if(cur && inc){ suppressed=(inc.text!==input.value); inc.text=input.value; inc.updated=cur.updated; }
+    else editing=false;
   }
 
   store=merged;
   saveLocal();
   applyResultsWidth(store.resultsWidth);
   renderTags(); renderDocs();
-  if(editing) render(); else loadActiveIntoEditor();
+  if(editing) render();
+  else{
+    // keep the caret roughly in place when the editor is focused but idle
+    const focused=(document.activeElement===input);
+    const caret=focused ? input.selectionStart : 0;
+    loadActiveIntoEditor();
+    if(focused){ const c=Math.min(caret, input.value.length); input.setSelectionRange(c,c); }
+  }
+  return suppressed;
 }
 
 /* Listen to the cloud doc. The FIRST snapshot reconciles this device with the
@@ -3090,13 +3119,31 @@ function subscribeCloud(){
     const remote=parseRemote(snap.data());
     if(!remote){ if(first){ first=false; cloudReady=true; } return; }
     const merged=mergeStores(store, remote);
-    adoptMerged(merged);
+    const suppressed=adoptMerged(merged);
+    if(suppressed) deferRemote(remote);              // re-merge once typing pauses
+    else { deferredRemote=null; clearTimeout(deferredTimer); }  // newer snapshot superseded any deferral
     const diverged = syncPayload(merged)!==syncPayload(remote);
     if(first){ first=false; cloudReady=true; }
     if(diverged) pushCloud();                        // cloud was missing some of our data → push merge
   }, syncError);
 }
 
+/* An update that arrives mid-typing is held off the active doc (the user's
+   in-progress text wins the moment). Retry the merge after the typing window
+   so the newer remote text still lands once the user pauses — otherwise it
+   would be lost until some unrelated future snapshot. */
+let deferredRemote=null, deferredTimer=null;
+function deferRemote(remote){
+  deferredRemote=remote;
+  clearTimeout(deferredTimer);
+  deferredTimer=setTimeout(function retry(){
+    if(!deferredRemote) return;
+    const m=mergeStores(store, deferredRemote);
+    if(adoptMerged(m)){ deferredTimer=setTimeout(retry, 4500); return; }  // still typing
+    deferredRemote=null;
+    pushCloud();   // publish the settled merge so every device converges
+  }, 4500);
+}
 function pushCloud(){
   if(!db||!currentUser||!cloudRef||!cloudReady) return;
   clearTimeout(cloudSaveTimer);
@@ -3106,6 +3153,17 @@ function pushCloud(){
   }, 500);
 }
 function cloudSave(){ if(cloudReady) pushCloud(); }
+/* Immediate push — no debounce. For moments when timers are about to freeze
+   (phone backgrounds the tab / page is closing): the 300ms save and 500ms
+   push timers never fire there, so an edit made just before switching apps
+   used to sit only in memory until the tab came back — or die with it. */
+function flushSync(){
+  clearTimeout(saveTimer); persist();
+  if(!db||!currentUser||!cloudRef||!cloudReady) return;
+  clearTimeout(cloudSaveTimer);
+  cloudRef.set({ data: JSON.stringify(store), updated: Date.now() })
+    .then(()=>syncError(null)).catch(syncError);
+}
 
 /* ================================================================
    [BOOT]
@@ -3312,6 +3370,10 @@ function boot(){
   initResultsResize();
 
   window.addEventListener('resize', ()=>{ measureChar(); applyResultsWidth(store.resultsWidth); render(); });
+  // flush pending edits the moment the tab goes to background / closes —
+  // debounced timers freeze on mobile and may never fire otherwise
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') flushSync(); });
+  window.addEventListener('pagehide', flushSync);
 
   // keep gutter/results scrolled with editor vertical scroll is automatic (flex children)
 }
