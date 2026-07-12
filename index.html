@@ -737,23 +737,23 @@ function tokenizeMath(text, vars){
     if(c==='(' && text[i+1]===')'){ i+=2; continue; }
     // number
     const nm = text.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
-    if(nm && /\d/.test(nm[0])){ toks.push({t:'num',v:parseNum(nm[0])}); i+=nm[0].length; continue; }
+    if(nm && /\d/.test(nm[0])){ toks.push({t:'num',v:parseNum(nm[0]),s:i,e:i+nm[0].length}); i+=nm[0].length; continue; }
     // operators & parens
-    if('+-*/^()'.includes(c)){ toks.push({t:c}); i++; continue; }
+    if('+-*/^()'.includes(c)){ toks.push({t:c,s:i,e:i+1}); i++; continue; }
     if(c==='x'||c==='X'){ // 'x' as multiply only between values
       const prev=toks[toks.length-1];
       const nextCh=text[i+1]||'';
       if(prev&&(prev.t==='num'||prev.t===')'||prev.t==='var'||prev.t==='agg')&&/[\s\d(]/.test(nextCh)){
-        toks.push({t:'*'}); i++; continue;
+        toks.push({t:'*',s:i,e:i+1}); i++; continue;
       }
     }
-    if(c==='%'){ toks.push({t:'%'}); i++; continue; }
+    if(c==='%'){ toks.push({t:'%',s:i,e:i+1}); i++; continue; }
     // word: keyword / variable / 'of' / context
     const wm = text.slice(i).match(/^[\p{L}\p{L}_][\p{L}\d_]*/u);
     if(wm){
       // try greedy multi-word variable match starting here
       let matchedVar = matchVarAt(text, i, varNames);
-      if(matchedVar){ toks.push({t:'var',name:matchedVar.name}); i+=matchedVar.len; continue; }
+      if(matchedVar){ toks.push({t:'var',name:matchedVar.name,s:i,e:i+matchedVar.len}); i+=matchedVar.len; continue; }
       const w = wm[0].toLowerCase();
       const prev = toks[toks.length-1];
       const prevIsValue = prev && (prev.t==='num'||prev.t===')'||prev.t==='var'||prev.t==='agg'||prev.t==='%');
@@ -761,8 +761,8 @@ function tokenizeMath(text, vars){
       // In prose ("The Buddha of Suburbia (1993)") it used to become a dangling
       // operator that made the whole line unparseable — killing the result and
       // the number highlight. Now such an 'of' is plain context.
-      if(w==='of'){ if(prevIsValue) toks.push({t:'of'}); i+=wm[0].length; continue; }
-      if(KEYWORDS.has(w)){ toks.push({t:'agg',v:w}); i+=wm[0].length; continue; }
+      if(w==='of'){ if(prevIsValue) toks.push({t:'of',s:i,e:i+wm[0].length}); i+=wm[0].length; continue; }
+      if(KEYWORDS.has(w)){ toks.push({t:'agg',v:w,s:i,e:i+wm[0].length}); i+=wm[0].length; continue; }
       i+=wm[0].length; continue; // context word -> ignore
     }
     i++; // unknown char -> skip
@@ -923,6 +923,35 @@ function evaluate(toks, scope, ctx){
   }catch(e){ return null; }
 }
 
+/* Lenient wrapper around evaluate(): the strict path first (zero behavior
+   change for any line that already computes). When strict parsing fails on
+   leftover tokens, split the stream into segments at value|value boundaries
+   ("85 - 92 (1992)" -> [85-92] [(1992)]), drop segments that are standalone
+   parenthesized groups (no operator attaches them to the rest -> they simply
+   don't participate), and evaluate what remains if it is unambiguous. This
+   is why "album 85 - 92 (1 992)" now yields -7 instead of a dead line.
+   Returns {v, range}; `range` is the [start,end) char span (in the tokenized
+   string's coordinates) of the winning segment, or null when the whole line
+   participated - the highlighter uses it to leave ignored numbers unpainted. */
+function evaluateLenient(toks, scope, ctx){
+  const direct = evaluate(toks, scope, ctx);
+  if(direct!==null || toks.length===0) return {v:direct, range:null};
+  const endsVal  = t=>t==='num'||t===')'||t==='%'||t==='var'||t==='agg';
+  const startsVal= t=>t==='num'||t==='('||t==='var'||t==='agg';
+  const segs=[]; let start=0;
+  for(let k=1;k<toks.length;k++)
+    if(endsVal(toks[k-1].t)&&startsVal(toks[k].t)){ segs.push(toks.slice(start,k)); start=k; }
+  segs.push(toks.slice(start));
+  if(segs.length<2) return {v:null, range:null};
+  const isParen=s=>s[0].t==='(' && s[s.length-1].t===')';
+  const rest=segs.filter(s=>!isParen(s));
+  const target = rest.length===1 ? rest[0] : (rest.length===0 ? segs[0] : null);
+  if(!target) return {v:null, range:null};
+  const v=evaluate(target, scope, ctx);
+  return v===null ? {v:null, range:null}
+                  : {v, range:[target[0].s, target[target.length-1].e]};
+}
+
 /* ================================================================
    Line classification & document analysis.
    ================================================================ */
@@ -1016,7 +1045,7 @@ function analyze(text){
     const varDefLine=varDefLineBySection[sec] || (varDefLineBySection[sec]={});
     const content=line.slice(cls.markerLen);
     const isBlank=line.trim()==='';
-    let result=null, assignedName=null;
+    let result=null, assignedName=null, calcRange=null;
 
     // run boundary: blank line or heading resets the contiguous block
     if(isBlank || cls.kind==='super' || cls.kind==='header'){ ctx.contig=[]; }
@@ -1028,17 +1057,22 @@ function analyze(text){
       if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
         const rhs=am[3];
         const toks=tokenizeMath(rhs, vars);
-        let v=evaluate(toks, scope, ctx);
+        const lr=evaluateLenient(toks, scope, ctx);
+        let v=lr.v;
         if(v!==null && (am[2]||hasRoundMarker(rhs))) v=applyRoundMarker(v);
-        if(v!==null){ scope[name]=v; result=v; assignedName=name; }
+        if(v!==null){ scope[name]=v; result=v; assignedName=name;
+          // rhs runs to end of line, so its offset within the line is exact
+          if(lr.range){ const off=line.length-rhs.length; calcRange=[lr.range[0]+off, lr.range[1]+off]; } }
         if(varDefLine[name]===undefined) varDefLine[name]=idx;
       }
     }
 
     if(result===null && cls.kind!=='super' && cls.kind!=='header'){
       const toks=tokenizeMath(content, vars);
-      result=evaluate(toks, scope, ctx);
+      const lr=evaluateLenient(toks, scope, ctx);
+      result=lr.v;
       if(result!==null && hasRoundMarker(content)) result=applyRoundMarker(result);
+      if(result!==null && lr.range) calcRange=[lr.range[0]+cls.markerLen, lr.range[1]+cls.markerLen];
     }
 
     // feed aggregation (skip boundary/heading lines)
@@ -1047,7 +1081,7 @@ function analyze(text){
       ctx.prev=result;
     }
 
-    out.push({raw:line, cls, content, result, assignedName, section:sec});
+    out.push({raw:line, cls, content, result, assignedName, calcRange, section:sec});
   });
 
   return {lines:out, varsBySection, varDefLineBySection, scopesBySection};
@@ -1064,6 +1098,11 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const {raw, cls} = item;
   const len=raw.length;
   const hasResult = item.result!==null;   // this line takes part in a computation
+  // When the lenient evaluator ignored part of the line (a standalone paren
+  // group like "(1 992)"), only the participating span gets number/operator
+  // colors; the ignored group stays plain text, numbr-style.
+  const cr = item.calcRange;
+  const inCalc = k => !cr || (k>=cr[0] && k<cr[1]);
   // char-class array; higher priority overrides
   const P={base:0, num:1, date:2, op:3, tag:4, varr:5, link:6};
   const cclass=new Array(len).fill('');   // css class per char
@@ -1099,7 +1138,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
       if(dm){ paint(i,i+dm[0].length,'date',P.date,{type:'date'}); i+=dm[0].length; continue; }
       const nm=scanText.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
       if(nm && /\d/.test(nm[0]) && !/[\p{L}_]/u.test(scanText[i-1]||' ')){
-        if(hasResult) paint(i,i+nm[0].length,'num',P.num,{type:'num'});
+        if(hasResult && inCalc(i)) paint(i,i+nm[0].length,'num',P.num,{type:'num'});
         i+=nm[0].length; continue;
       }
       i++;
@@ -1109,7 +1148,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     if(hasResult){
       for(let k=bodyStart;k<len;k++){
         const ch=scanText[k];
-        if('+-*/^%'.includes(ch) && prio[k]<P.op) paint(k,k+1,'opx',P.op,{type:'op'});
+        if('+-*/^%'.includes(ch) && prio[k]<P.op && inCalc(k)) paint(k,k+1,'opx',P.op,{type:'op'});
         else if('()='.includes(ch) && prio[k]<P.op) paint(k,k+1,'op',P.op,{type:'op'});
       }
     }
@@ -3381,7 +3420,7 @@ function boot(){
 document.addEventListener('DOMContentLoaded', boot);
 
 /* expose a tiny hook for automated testing */
-window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, tokenizeMath, normalizePasted, dateAt,
+window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluateLenient, tokenizeMath, normalizePasted, dateAt,
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
 
