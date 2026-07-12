@@ -36,6 +36,7 @@
   --var:#88c892;           /* variables (soft green) — top priority */
   --pill-hover-bg:rgba(136,200,146,.18); /* oval bg behind a variable, hover-only */
   --super:#b98cf5;         /* supertask // (purple) */
+  --super-soft:rgba(185,140,245,.16); /* pill bg behind a // heading */
   --date:#e3b755;          /* dates dd.mm (yellow) */
   --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
   --num:#7ec8f5;           /* numbers in a computation (sky blue) */
@@ -79,6 +80,7 @@
   --var:#3f9a52;
   --pill-hover-bg:rgba(63,154,82,.16);
   --super:#7c4dd6;
+  --super-soft:rgba(124,77,214,.13);
   --date:#b07d10;
   --date-spot:rgba(176,125,16,.14);
   --num:#2b7fc4;
@@ -106,6 +108,14 @@ body{
 button{font-family:inherit;color:inherit}
 
 #app{display:flex;height:100vh;width:100vw;position:relative}
+/* Fixed narrow "vertical" web layout (numbr-style): cap the workspace width
+   so the text column sits right next to the results; a wide monitor gets
+   empty side gutters instead of a stretched editor. Phones keep full width
+   (the max-width:720px block below already restyles them). */
+@media (min-width:721px){
+  #app{justify-content:center}
+  #workspace{max-width:720px;border-left:1px solid var(--border-soft);border-right:1px solid var(--border-soft)}
+}
 
 /* ---------- Top bar: brand menu + document tabs ---------- */
 .brand-name{
@@ -323,8 +333,17 @@ button{font-family:inherit;color:inherit}
 #highlight .opx{color:var(--op-work);font-weight:600}
 #highlight .date{color:var(--date);font-weight:500}
 #highlight .super{color:var(--super)}
+/* "//" supertask heading: purple label pill hugging the heading text. The
+   box-shadow spread fattens the pill without touching layout metrics, and
+   box-decoration-break keeps the fill on every wrapped fragment. */
+#highlight .super-pill{background:var(--super-soft);box-shadow:0 0 0 3px var(--super-soft);
+  border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
 #highlight .header{color:var(--dim);font-weight:600}
 #highlight .var{color:var(--var);font-weight:500}
+/* A USAGE of a variable is a label pill (same soft green as the hover oval);
+   the defining occurrence (LHS of "name = ...") stays plain green - only the
+   original is pill-less. Same no-layout-shift trick as .rpill. */
+#highlight .varu{background:var(--pill-hover-bg);box-shadow:0 0 0 2px var(--pill-hover-bg);border-radius:6px}
 #highlight .tag{font-weight:500;border-radius:4px}
 #highlight .sub{color:var(--text-strong)}
 /* Inline result pill. Horizontal padding gives breathing room; the equal
@@ -534,7 +553,7 @@ button{font-family:inherit;color:inherit}
           <div class="ref-group">
             <div class="ref-h">Переменные</div>
             <div class="row"><code>бюджет = 500k</code><span class="desc">зелёная, действует в своём разделе <code class="mini">//</code></span></div>
-            <div class="note">Клик по переменной копирует её имя, двойной — правит написание.</div>
+            <div class="note">Использование переменной — в пилюле; наведение подсвечивает оригинал. Клик копирует имя, двойной — правит написание.</div>
           </div>
           <div class="ref-group">
             <div class="ref-h">Агрегаты</div>
@@ -1205,13 +1224,25 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
 
   // ---- variables (top priority) ----
   if(vars.size){
+    // The LHS name of an assignment on THIS line is the variable's original
+    // (its definition) - plain green, no pill. Every other occurrence is a
+    // usage, rendered as a label pill (.varu).
+    let defName=null, defStart=-1;
+    const am=ASSIGN_RE.exec(raw);
+    if(am){ defName=am[1].trim().toLowerCase(); defStart=raw.indexOf(am[1]); }
     const names=[...vars].sort((a,b)=>b.length-a.length);
+    const takenV=[];   // longer names win; a shorter name inside one is skipped
     for(const name of names){
       const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(name)+'(?![\\p{L}\\d_])','giu');
       let mt;
       while((mt=re.exec(raw))){
-        const def=varDefLine[name];
-        paint(mt.index, mt.index+mt[0].length, 'var', P.varr, {type:'var', name, defLine:def});
+        const s=mt.index, e=mt.index+mt[0].length;
+        if(!takenV.some(([ts,te])=>s<te&&e>ts)){
+          const def=varDefLine[name];
+          const isDef = name===defName && s===defStart;
+          paint(s, e, isDef?'var':'var varu', P.varr, {type:'var', name, defLine:def});
+          takenV.push([s,e]);
+        }
         if(mt.index===re.lastIndex) re.lastIndex++;
       }
     }
@@ -1261,7 +1292,11 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
 
   // Empty lines keep their height via the fixed .hl-line height; no filler
   // char is added so overlay text stays 1:1 with the textarea.
-  const html = markerHTML + bodyHTML;
+  // A "//" heading gets its purple label pill via a wrapper span (background
+  // only - zero effect on char metrics, so the caret stays aligned).
+  const html = (cls.kind==='super' && bodyHTML)
+    ? '<span class="super-pill">'+bodyHTML+'</span>'
+    : markerHTML + bodyHTML;
   return {html, cmeta, markerLen, checked:(cls.kind==='checkbox'&&cls.checked), spotlightColor, dateSpotlight};
 }
 
@@ -2610,13 +2645,35 @@ function showPillHover(row, start, end){
   pillhover.innerHTML=html;
 }
 function hidePillHover(){ if(pillhover.innerHTML) pillhover.innerHTML=''; }
+/* The definition (LHS) range of `name` within the section of line `row`:
+   the "original" variable a usage points back to. null when the def line is
+   gone or no longer an assignment of that name (mid-edit states). */
+function varDefRange(row, name){
+  if(!model) return null;
+  const item=model.data.lines[row]; if(!item) return null;
+  const defs=model.data.varDefLineBySection[item.section];
+  const defRow=defs ? defs[name] : undefined;
+  if(defRow===undefined) return null;
+  const defItem=model.data.lines[defRow]; if(!defItem) return null;
+  const am=ASSIGN_RE.exec(defItem.raw);
+  if(!am || am[1].trim().toLowerCase()!==name) return null;
+  const s=defItem.raw.indexOf(am[1]);
+  if(s<0) return null;
+  return {row:defRow, start:s, end:s+am[1].length};
+}
 function onStackMove(e){
   const {row,col}=hitTestChar(e.clientX,e.clientY);
   const n=model?model.data.lines.length:0;
   hoverRow=(row>=0&&row<n)?row:-1;
   srcRow=-1;
   const pillRng=hoverRow>=0 ? varPillRangeAt(hoverRow,col) : null;
-  if(pillRng) showPillHover(hoverRow, pillRng.start, pillRng.end);
+  if(pillRng){
+    // Hovering ANY occurrence of a variable lights up the ORIGINAL's pill
+    // (the definition), so a usage always points back to where it was set.
+    const org=varDefRange(hoverRow, pillRng.name);
+    if(org) showPillHover(org.row, org.start, org.end);
+    else showPillHover(hoverRow, pillRng.start, pillRng.end);
+  }
   else hidePillHover();
   // Hovering a variable shows ONLY its oval pill — no whole-line tint at all.
   // The full-line "reference" highlight remains solely on result-pill hover
