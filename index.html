@@ -33,14 +33,15 @@
   --dim-2:#4d4941;
   --accent:#c96442;        /* Claude clay */
   --accent-soft:rgba(201,100,66,.16);
-  --var:#88c892;           /* variables (soft green) — top priority */
-  --pill-hover-bg:rgba(136,200,146,.18); /* oval bg behind a variable, hover-only */
+  --var:#4ed6c8;           /* variables (turquoise) — top priority */
+  --pill-hover-bg:rgba(78,214,200,.18); /* oval bg behind a variable + usage pills */
   --super:#b98cf5;         /* supertask // (purple) */
   --super-soft:rgba(185,140,245,.16); /* pill bg behind a // heading */
   --date:#e3b755;          /* dates dd.mm (yellow) */
   --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
   --num:#7ec8f5;           /* numbers in a computation (sky blue) */
   --op-work:#e8a24e;       /* working arithmetic signs (orange) */
+  --label:#e8a24e;         /* "текст:" labels (orange, always) */
   --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
   --result:#8fc7a8;        /* right-column results */
   --checked-bg:rgba(101,158,120,.15);
@@ -54,8 +55,8 @@
 
   --font-mono:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,'Liberation Mono',monospace;
   --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
-  --fs:14px;
-  --lh:24px;
+  --fs:16px;   /* numbr-like scale: fewer lines on screen, better legibility */
+  --lh:28px;
   --pad-y:14px;
   --pad-x:16px;
   --gutter-w:30px;
@@ -77,14 +78,15 @@
   --dim-2:#bcb6aa;
   --accent:#c96442;
   --accent-soft:rgba(201,100,66,.15);
-  --var:#3f9a52;
-  --pill-hover-bg:rgba(63,154,82,.16);
+  --var:#18a496;
+  --pill-hover-bg:rgba(24,164,150,.16);
   --super:#7c4dd6;
   --super-soft:rgba(124,77,214,.13);
   --date:#b07d10;
   --date-spot:rgba(176,125,16,.14);
   --num:#2b7fc4;
   --op-work:#cc7519;
+  --label:#cc7519;
   --op:#8a8272;
   --result:#2f9666;
   --checked-bg:rgba(101,158,120,.16);
@@ -299,7 +301,7 @@ button{font-family:inherit;color:inherit}
 }
 .gutter-line{
   height:var(--lh);line-height:var(--lh);padding-right:6px;color:var(--dim);
-  font-size:11px;cursor:pointer;position:relative;white-space:nowrap;
+  font-size:12px;cursor:pointer;position:relative;white-space:nowrap;
 }
 .gutter-line:hover{color:var(--text)}
 .gutter-line.selected{background:var(--accent-soft)}
@@ -332,6 +334,8 @@ button{font-family:inherit;color:inherit}
 #highlight .op{color:var(--op)}
 #highlight .opx{color:var(--op-work);font-weight:600}
 #highlight .date{color:var(--date);font-weight:500}
+#highlight .label{color:var(--label);font-weight:500}
+#highlight .quote{color:var(--super)}
 #highlight .super{color:var(--super)}
 /* "//" supertask heading: purple label pill hugging the heading text. The
    box-shadow spread fattens the pill without touching layout metrics, and
@@ -340,7 +344,7 @@ button{font-family:inherit;color:inherit}
   border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
 #highlight .header{color:var(--dim);font-weight:600}
 #highlight .var{color:var(--var);font-weight:500}
-/* A USAGE of a variable is a label pill (same soft green as the hover oval);
+/* A USAGE of a variable is a label pill (same turquoise as the hover oval);
    the defining occurrence (LHS of "name = ...") stays plain green - only the
    original is pill-less. Same no-layout-shift trick as .rpill. */
 #highlight .varu{background:var(--pill-hover-bg);box-shadow:0 0 0 2px var(--pill-hover-bg);border-radius:6px}
@@ -379,7 +383,7 @@ button{font-family:inherit;color:inherit}
 
 /* oval pill background behind a variable, shown ONLY while hovering it —
    sits behind #highlight's text (lower in the DOM, same z-index) so the
-   green .var glyphs paint on top of it, not the other way round. */
+   turquoise .var glyphs paint on top of it, not the other way round. */
 #pillhover{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none}
 .pill-hover-box{position:absolute;height:var(--lh);border-radius:7px;background:var(--pill-hover-bg)}
 
@@ -395,13 +399,13 @@ button{font-family:inherit;color:inherit}
   border-left:1px solid var(--border-soft);user-select:none;min-height:100%;
 }
 .result-line{
-  height:var(--lh);line-height:var(--lh);padding:0 12px;display:flex;justify-content:flex-end;
+  height:var(--lh);line-height:var(--lh);padding:0 12px;display:flex;justify-content:flex-start;
   align-items:center;position:relative;
 }
 .result-line .pill{
   max-width:100%;box-sizing:border-box;
-  border:1px solid transparent;border-radius:999px;padding:0 11px;height:20px;line-height:19px;
-  background:rgba(160,158,150,.16);color:var(--text-strong);font-size:12.5px;
+  border:1px solid transparent;border-radius:999px;padding:0 11px;height:22px;line-height:21px;
+  background:rgba(160,158,150,.16);color:var(--text-strong);font-size:13.5px;
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   cursor:pointer;transition:border-color .12s,background .12s,color .12s;
 }
@@ -552,7 +556,7 @@ button{font-family:inherit;color:inherit}
           </div>
           <div class="ref-group">
             <div class="ref-h">Переменные</div>
-            <div class="row"><code>бюджет = 500k</code><span class="desc">зелёная, действует в своём разделе <code class="mini">//</code></span></div>
+            <div class="row"><code>бюджет = 500k</code><span class="desc">бирюзовая, действует в своём разделе <code class="mini">//</code></span></div>
             <div class="note">Использование переменной — в пилюле; наведение подсвечивает оригинал. Клик копирует имя, двойной — правит написание.</div>
           </div>
           <div class="ref-group">
@@ -568,6 +572,8 @@ button{font-family:inherit;color:inherit}
             <div class="ref-h">Структура</div>
             <div class="row"><code>//</code><span class="desc">надзадача (фиолетовая), ниже — отступ</span></div>
             <div class="row"><code>12.05</code><span class="desc">дата дд.мм (жёлтая)</span></div>
+            <div class="row"><code>текст:</code><span class="desc">метка-ярлык (оранжевая)</span></div>
+            <div class="row"><code>"цитата"</code><span class="desc">текст в кавычках (фиолетовый)</span></div>
           </div>
           <div class="ref-group">
             <div class="ref-h">Тэги · прожектор</div>
@@ -628,7 +634,7 @@ button{font-family:inherit;color:inherit}
 </div>
 
 <div id="ctxmenu">
-  <p class="ctx-title">Цвет номеров строк</p>
+  <p class="ctx-title">Цвет строк</p>
   <div class="swatches" id="ctx-swatches"></div>
 </div>
 <div id="linemenu">
@@ -665,6 +671,7 @@ function isFmtWS(ch){ return ch===NBSP || ch===OSP; }
 const SENT = '\u2063';     // invisible marker: a copied result → inline pill
 function isCore(ch){ return !isFmtWS(ch) && ch!==SENT; }
 const TAG_SPOTLIGHT_ALPHA = 0.18;   // whole-line tint strength for an active "/tag" spotlight
+const LINE_TINT_ALPHA = 0.12;       // gutter-assigned line colors: soft whole-row wash
 const EMPTY_VARS = new Set(), EMPTY_OBJ = {};   // shared read-only fallbacks for sections with no vars
 
 /* Group the integer part every 3 digits with NBSP. */
@@ -1132,7 +1139,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const cr = item.calcRange;
   const inCalc = k => !cr || (k>=cr[0] && k<cr[1]);
   // char-class array; higher priority overrides
-  const P={base:0, num:1, date:2, op:3, tag:4, varr:5, link:6};
+  const P={base:0, num:1, date:2, op:3, label:4, quote:5, tag:6, varr:7, link:8};
   const cclass=new Array(len).fill('');   // css class per char
   const cmeta =new Array(len).fill(null); // {type, defLine} for hover
   const prio  =new Array(len).fill(-1);
@@ -1178,6 +1185,47 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
         const ch=scanText[k];
         if('+-*/^%'.includes(ch) && prio[k]<P.op && inCalc(k)) paint(k,k+1,'opx',P.op,{type:'op'});
         else if('()='.includes(ch) && prio[k]<P.op) paint(k,k+1,'op',P.op,{type:'op'});
+      }
+    }
+    // ---- "текст:" labels: a phrase directly followed by a colon is ALWAYS
+    //      orange, computing line or not. The colon must be followed by a
+    //      space or the end of line, so times (19:30), URLs (https://...)
+    //      and host:port never qualify. A phrase is words joined by single
+    //      spaces (incl. the formatter's no-break spaces, so a grouped
+    //      number like "2 500:" colors whole); tags/vars/links still win
+    //      over the label's word part via their higher priority. ----
+    {
+      const re=/[\p{L}\d_]+(?:[ \u00a0\u202f]+[\p{L}\d_]+)*:(?=\s|$)/gu;
+      let m;
+      while((m=re.exec(scanText))){
+        // A multi-word phrase is a label only at the start of the line's
+        // CONTENT ("личный бюджет: 200") - auto-indent spaces under a "//"
+        // section don't count. Mid-line, only the word touching the colon
+        // is the label ("имя: иван город: москва" -> "имя:" and "город:",
+        // never the value between them).
+        let contentStart=bodyStart;
+        while(contentStart<len && scanText[contentStart]===' ') contentStart++;
+        let s=m.index;
+        if(s!==contentStart){
+          const lastSep=Math.max(m[0].lastIndexOf(' '), m[0].lastIndexOf('\u00a0'), m[0].lastIndexOf('\u202f'));
+          if(lastSep>=0) s=m.index+lastSep+1;
+        }
+        const pc=scanText[s-1]||' ';
+        // "12.05:" / "3,14:" - the tail of a date or decimal is not a label
+        if(pc!=='.' && pc!==',' && s>=bodyStart)
+          paint(s, m.index+m[0].length, 'label', P.label, {type:'label'});
+        if(m.index===re.lastIndex) re.lastIndex++;
+      }
+    }
+    // ---- "quoted text": everything inside straight double quotes (the
+    //      quotes included) is purple. Wins over numbers/labels/dates so a
+    //      quoted phrase reads as one purple piece; tags, variables and
+    //      links still take precedence. Unpaired quotes stay plain. ----
+    {
+      const re=/"[^"\n]*"/g;
+      let m;
+      while((m=re.exec(scanText))){
+        if(m.index>=bodyStart) paint(m.index, m.index+m[0].length, 'quote', P.quote, {type:'quote'});
       }
     }
   }
@@ -1547,13 +1595,20 @@ function render(){
   //    lines wrap into more rows than predicted and every column below drifts.
   const activeTags=activeSpotlightTags(text, store.tags);
   const activeDates=activeSpotlightDates(text);
+  const lineCols=doc().lineColors;
   let hl='';
   for(let k=0;k<n;k++){
     const lineSec=A.lines[k].section;
     const built=buildLineHTML(A.lines[k], A.varsBySection[lineSec]||EMPTY_VARS, A.varDefLineBySection[lineSec]||EMPTY_OBJ, store.tags, activeTags, activeDates);
     model.meta[k]=built.cmeta;
-    const spotStyle=built.spotlightColor? ' style="box-shadow:inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA)+'"'
-                   : built.dateSpotlight? ' style="box-shadow:inset 0 0 0 999px var(--date-spot)"' : '';
+    const tints=[];
+    if(built.spotlightColor) tints.push('inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA));
+    else if(built.dateSpotlight) tints.push('inset 0 0 0 999px var(--date-spot)');
+    // a gutter-assigned line color washes the WHOLE row, softly - the vivid
+    // color itself stays on the line number, the text just gets a light tint
+    const lcol=lineCols[k];
+    if(lcol) tints.push('inset 0 0 0 999px '+hexToRgba(lcol, LINE_TINT_ALPHA));
+    const spotStyle=tints.length? ' style="box-shadow:'+tints.join(',')+'"' : '';
     hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'"'+spotStyle+'>'+built.html+'</div>';
   }
   highlight.innerHTML=hl;
@@ -1574,10 +1629,11 @@ function render(){
   //    measured rows so every column lines up with the wrapped text.
   let g='';
   for(let k=0;k<n;k++){
-    const col=doc().lineColors[k];
+    const col=lineCols[k];
     const sel=selectedGutter.has(k)?' selected':'';
     const h=lineRowCount[k]*LH;
-    g+='<div class="gutter-line'+sel+'" data-i="'+k+'" style="height:'+h+'px'+(col?';color:'+col:'')+'">'+(k+1)+'</div>';
+    g+='<div class="gutter-line'+sel+'" data-i="'+k+'" style="height:'+h+'px'
+      +(col?';color:'+col+';background:'+hexToRgba(col,LINE_TINT_ALPHA):'')+'">'+(k+1)+'</div>';
   }
   gutter.innerHTML=g;
 
@@ -1591,10 +1647,12 @@ function render(){
       hs+='<div class="cbox-hit" data-i="'+k+'" style="top:'+top+'px;left:'+left+'px"></div>';
     }
     if(it.result!==null){
-      rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'" style="height:'+h+'px">'
+      const rbg=lineCols[k]? ';background:'+hexToRgba(lineCols[k],LINE_TINT_ALPHA) : '';
+      rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'" style="height:'+h+'px'+rbg+'">'
         +'<span class="pill">'+esc(fmt(it.result))+'</span></div>';
     }else{
-      rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px"></div>';
+      const rbg=lineCols[k]? ';background:'+hexToRgba(lineCols[k],LINE_TINT_ALPHA) : '';
+      rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px'+rbg+'"></div>';
     }
   }
   hotspots.innerHTML=hs;
