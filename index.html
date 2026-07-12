@@ -310,6 +310,11 @@ button{font-family:inherit;color:inherit}
    is an inline background, so selection paints ABOVE it via box-shadow
    (accent bar + wash) - a different property that inline styles can't win. */
 .gutter-line.selected{box-shadow:inset 2px 0 0 var(--accent), inset 0 0 0 999px var(--accent-soft)}
+/* While TEXT is selected in the editor, the spanned lines' numbers light up:
+   number glyphs only - the gutter cell, the selected text band and the
+   results column stay exactly as they are. !important beats an assigned
+   line-color's inline color so the accent reads on colored rows too. */
+.gutter-line.selrange{color:var(--accent)!important;font-weight:700}
 .gutter-line.src{color:var(--accent);font-weight:700}
 
 /* stack: layered highlight / textarea / hotspots. Height driven by in-flow
@@ -576,7 +581,7 @@ button{font-family:inherit;color:inherit}
           <div class="ref-group">
             <div class="ref-h">Структура</div>
             <div class="row"><code>//</code><span class="desc">надзадача (фиолетовая), ниже — отступ</span></div>
-            <div class="row"><code># текст</code><span class="desc">комментарий — серый, в расчётах не участвует</span></div>
+            <div class="row"><code># текст</code><span class="desc">комментарий (и в конце строки: <code class="mini">5+5 #прим</code>) — в расчётах не участвует</span></div>
             <div class="row"><code>12.05</code><span class="desc">дата дд.мм (жёлтая)</span></div>
             <div class="row"><code>текст:</code><span class="desc">метка-ярлык (оранжевая)</span></div>
             <div class="row"><code>"цитата"</code><span class="desc">текст в кавычках (фиолетовый)</span></div>
@@ -1101,10 +1106,11 @@ function analyze(text){
       const name=am[1].trim().toLowerCase();
       if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
         const rhs=am[3];
-        const toks=tokenizeMath(rhs, vars);
+        const rhsCode=stripLineComment(rhs);   // "x = 121 440 #note" -> "x = 121 440"
+        const toks=tokenizeMath(rhsCode, vars);
         const lr=evaluateLenient(toks, scope, ctx);
         let v=lr.v;
-        if(v!==null && (am[2]||hasRoundMarker(rhs))) v=applyRoundMarker(v);
+        if(v!==null && (am[2]||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
         if(v!==null){ scope[name]=v; result=v; assignedName=name;
           // rhs runs to end of line, so its offset within the line is exact
           if(lr.range){ const off=line.length-rhs.length; calcRange=[lr.range[0]+off, lr.range[1]+off]; } }
@@ -1113,10 +1119,11 @@ function analyze(text){
     }
 
     if(result===null && cls.kind!=='super' && cls.kind!=='header'){
-      const toks=tokenizeMath(content, vars);
+      const contentCode=stripLineComment(content);
+      const toks=tokenizeMath(contentCode, vars);
       const lr=evaluateLenient(toks, scope, ctx);
       result=lr.v;
-      if(result!==null && hasRoundMarker(content)) result=applyRoundMarker(result);
+      if(result!==null && hasRoundMarker(contentCode)) result=applyRoundMarker(result);
       if(result!==null && lr.range) calcRange=[lr.range[0]+cls.markerLen, lr.range[1]+cls.markerLen];
     }
 
@@ -1149,7 +1156,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const cr = item.calcRange;
   const inCalc = k => !cr || (k>=cr[0] && k<cr[1]);
   // char-class array; higher priority overrides
-  const P={base:0, num:1, date:2, op:3, label:4, quote:5, tag:6, varr:7, link:8};
+  const P={base:0, num:1, date:2, op:3, label:4, quote:5, tag:6, varr:7, link:8, cmt:9};
   const cclass=new Array(len).fill('');   // css class per char
   const cmeta =new Array(len).fill(null); // {type, defLine} for hover
   const prio  =new Array(len).fill(-1);
@@ -1161,6 +1168,10 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
       if(pr>=prio[k]){ prio[k]=pr; cclass[k]=cls; cmeta[k]=meta||cmeta[k]; color[k]=col||null; }
     }
   }
+
+  // inline "#" comment tail (text/checkbox lines only): computed once here,
+  // painted over everything at the end, reused by the spotlight checks below
+  const cmtStart=(cls.kind!=='super'&&cls.kind!=='header') ? lineCommentStart(raw) : -1;
 
   const markerLen=cls.markerLen;
   // Only checkboxes render their marker separately; super/header render the
@@ -1238,6 +1249,10 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
         if(m.index>=bodyStart) paint(m.index, m.index+m[0].length, 'quote', P.quote, {type:'quote'});
       }
     }
+    // ---- inline "#" comment: the tail is uniformly gray, over everything
+    //      (variables, tags, links, numbers all lose to it), and hover/click
+    //      metas under it are cleared so nothing in a comment is interactive ----
+    if(cmtStart>=0) paint(Math.max(cmtStart,bodyStart), len, 'header', P.cmt, {type:'comment'});
   }
 
   // ---- tags (custom colors) ---- (never inside a "#" comment)
@@ -1266,7 +1281,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
       const trigRe=new RegExp('(?<![\\p{L}\\d_'+OSP+'])/'+OSP+'?'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','iu');
       if(trigRe.test(raw)) continue;
       const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','iu');
-      if(re.test(raw)){ spotlightColor=tag.color; break; }
+      if(re.test(cmtStart<0?raw:raw.slice(0,cmtStart))){ spotlightColor=tag.color; break; }
     }
   }
 
@@ -1278,7 +1293,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   //      the char-level highlight: tag > date). ----
   let dateSpotlight=false;
   if(!spotlightColor && activeDates && activeDates.size && cls.kind!=='header'){
-    dateSpotlight = lineHasBareDate(raw, activeDates);
+    dateSpotlight = lineHasBareDate(cmtStart<0?raw:raw.slice(0,cmtStart), activeDates);
   }
 
   // ---- variables (top priority) ---- (never inside a "#" comment)
@@ -1360,6 +1375,32 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
 }
 
 function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+
+/* Start index of an inline "#" comment in a single line, or -1.
+   Shell-like rules: the "#" must be at position 0 or preceded by whitespace
+   (incl. the formatter's no-break/padding spaces) - so "заказ#42" and "C#"
+   are plain text; it must not sit inside a URL (site.com/page#anchor stays
+   a link) and not inside a paired "quoted" range. Everything from the
+   marker to the end of the line is comment: gray, and invisible to math. */
+function lineCommentStart(s){
+  if(s.indexOf('#')===-1) return -1;
+  const urls=urlRanges(s);
+  const quotes=[]; const qre=/"[^"\n]*"/g; let qm;
+  while((qm=qre.exec(s))) quotes.push([qm.index, qm.index+qm[0].length]);
+  for(let i=0;i<s.length;i++){
+    if(s[i]!=='#') continue;
+    if(i>0 && !/[ \t\u00a0\u202f]/.test(s[i-1])) continue;
+    if(urls.some(r=>i>=r.start&&i<r.end)) continue;
+    if(quotes.some(([a,b])=>i>a&&i<b)) continue;
+    return i;
+  }
+  return -1;
+}
+/* The line with any inline comment cut off - what math and scans should see. */
+function stripLineComment(s){
+  const cs=lineCommentStart(s);
+  return cs<0 ? s : s.slice(0,cs);
+}
 
 /* Which tags have a "/tagname" spotlight trigger present anywhere in the
    document — computed once per render, feeds buildLineHTML's per-line
@@ -1604,8 +1645,10 @@ function render(){
   //    grouped numbers ("1 800") and padded operators ("euro * наценка") —
   //    which stop word-break:break-all from packing rows uniformly, so long
   //    lines wrap into more rows than predicted and every column below drifts.
-  const activeTags=activeSpotlightTags(text, store.tags);
-  const activeDates=activeSpotlightDates(text);
+  // a "/тег" or "/13.05" trigger inside a comment must not activate anything
+  const textCode=text.split('\n').map(stripLineComment).join('\n');
+  const activeTags=activeSpotlightTags(textCode, store.tags);
+  const activeDates=activeSpotlightDates(textCode);
   const lineCols=doc().lineColors;
   let hl='';
   for(let k=0;k<n;k++){
@@ -1647,6 +1690,7 @@ function render(){
       +(col?';color:'+col+';background:'+hexToRgba(col,LINE_TINT_ALPHA):'')+'">'+(k+1)+'</div>';
   }
   gutter.innerHTML=g;
+  selRangeLines=[-9,-9]; selectionGutterSync();   // re-mark selected-range numbers on the fresh cells
 
   let hs='', rs='';
   for(let k=0;k<n;k++){
@@ -2256,6 +2300,7 @@ function varPillRangesInLine(row){
   if(!model || !model.data.lines[row]) return [];
   const item=model.data.lines[row];
   if(item.cls.kind==='header') return [];   // "#" comment: fully inert
+  const cmt=lineCommentStart(item.raw);     // inline tail is inert too
   const scope=model.data.scopesBySection[item.section];
   const names=model.data.varsBySection[item.section];
   if(!scope || !names || !names.size) return [];
@@ -2265,7 +2310,8 @@ function varPillRangesInLine(row){
     const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(name)+'(?![\\p{L}\\d_])','giu');
     let mt;
     while((mt=re.exec(raw))){
-      out.push({start:mt.index, end:mt.index+mt[0].length, name, text:mt[0], value:scope[name]});
+      if(cmt<0 || mt.index<cmt)
+        out.push({start:mt.index, end:mt.index+mt[0].length, name, text:mt[0], value:scope[name]});
       if(mt.index===re.lastIndex) re.lastIndex++;
     }
   }
@@ -2917,6 +2963,25 @@ function refreshGutterSel(){
     el.classList.toggle('selected', selectedGutter.has(+el.dataset.i));
   });
 }
+/* ---------- gutter mirror of the textarea TEXT selection ----------
+   Selecting text lights up the numbers of the spanned lines (glyphs only).
+   The results column and the text band itself are deliberately untouched. */
+let selRangeLines=[-9,-9];
+function selectionGutterSync(){
+  let a=-1,b=-1;
+  if(document.activeElement===input && input.selectionEnd>input.selectionStart){
+    const v=input.value;
+    a=v.slice(0,input.selectionStart).split('\n').length-1;
+    // minus one char: a selection ending at the very START of a line
+    // (dragging through the newline) doesn't count that next line
+    b=v.slice(0,input.selectionEnd-1).split('\n').length-1;
+    if(b<a) b=a;
+  }
+  if(a===selRangeLines[0] && b===selRangeLines[1]) return;
+  selRangeLines=[a,b];
+  const els=gutter.children;
+  for(let i=0;i<els.length;i++) els[i].classList.toggle('selrange', a>=0&&i>=a&&i<=b);
+}
 function onGutterCtx(e){
   const el=e.target.closest('.gutter-line'); if(!el) return;
   e.preventDefault();
@@ -3377,6 +3442,8 @@ function boot(){
   input.addEventListener('paste', onPaste);
   input.addEventListener('scroll', syncScroll);
 
+  document.addEventListener('selectionchange', selectionGutterSync);
+  input.addEventListener('blur', ()=>setTimeout(selectionGutterSync,0));
   stack.addEventListener('mousemove', onStackMove);
   stack.addEventListener('mouseleave', onStackLeave);
   stack.addEventListener('contextmenu', onStackCtx);
