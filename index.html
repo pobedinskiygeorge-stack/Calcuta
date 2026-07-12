@@ -299,7 +299,11 @@ button{font-family:inherit;color:inherit}
 .layer{
   margin:0;padding:var(--pad-y) var(--pad-x);
   font-family:var(--font-mono);font-size:var(--fs);line-height:var(--lh);
-  white-space:pre-wrap;word-break:break-all;tab-size:4;border:0;
+  /* Wrap only at word boundaries — never split a word across rows. A single
+     token longer than the whole line still breaks (last resort) so it can't
+     overflow and desync the overlay. #input below must carry the identical
+     rule or the caret would drift from the highlighted text. */
+  white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;tab-size:4;border:0;
 }
 
 /* highlight is the in-flow layer that gives #stack its height */
@@ -342,7 +346,7 @@ button{font-family:inherit;color:inherit}
 #input{
   position:absolute;top:0;left:0;width:100%;height:100%;z-index:3;resize:none;overflow:hidden;
   background:transparent;color:transparent;caret-color:var(--accent);
-  outline:none;white-space:pre-wrap;word-break:break-all;
+  outline:none;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;
 }
 #input::selection{background:var(--sel);color:var(--sel-text)}
 
@@ -395,11 +399,11 @@ button{font-family:inherit;color:inherit}
 .sw.clear{display:grid;place-items:center;background:var(--bg-editor);color:var(--dim);font-size:13px}
 
 /* line context menu (delete completed) */
-#linemenu{
+#linemenu,#docmenu{
   position:fixed;z-index:50;background:var(--bg-panel);border:1px solid var(--border);
   border-radius:10px;padding:5px;box-shadow:0 12px 34px rgba(0,0,0,.5);display:none;min-width:160px;
 }
-#linemenu.open{display:block}
+#linemenu.open,#docmenu.open{display:block}
 .lm-item{
   display:block;width:100%;text-align:left;background:none;border:0;border-radius:7px;
   padding:8px 10px;font-size:13px;color:var(--text);cursor:pointer;
@@ -607,6 +611,10 @@ button{font-family:inherit;color:inherit}
 </div>
 <div id="linemenu">
   <button class="lm-item danger" data-act="delete">Удалить строку</button>
+</div>
+<div id="docmenu">
+  <button class="lm-item" data-act="rename">Переименовать</button>
+  <button class="lm-item danger" data-act="delete">Удалить документ</button>
 </div>
 <div id="confirm-overlay">
   <div id="confirm-box" role="dialog" aria-modal="true">
@@ -1257,7 +1265,7 @@ const $=id=>document.getElementById(id);
 const input=$('input'), highlight=$('highlight'),
       gutter=$('gutter'), results=$('results'), hotspots=$('hotspots'),
       stack=$('stack'), editor=$('editor'), ctxmenu=$('ctxmenu'),
-      linemenu=$('linemenu'), toast=$('toast'),
+      linemenu=$('linemenu'), docmenu=$('docmenu'), toast=$('toast'),
       searchlayer=$('searchlayer'), pillhover=$('pillhover');
 
 const STORE_KEY='calcuta.v2';
@@ -1273,10 +1281,10 @@ let LH=24;                  // px per visual row — kept in sync with --lh by m
 let charsPerLine=1;         // how many chars fit before a line wraps
 let lineRowTop=[], lineRowCount=[];   // per-source-line cumulative offset / row span (in LH units)
 
-/* Long lines wrap instead of being clipped, so a source line can span several
-   visual rows. word-break:break-all wraps at a strict character count for a
-   monospace font, which makes it exactly predictable: charsPerLine tells us
-   how many rows a line of a given length needs, without touching the DOM. */
+/* Long lines wrap (at word boundaries) instead of being clipped, so a source
+   line can span several visual rows. Row counts/positions are measured from the
+   real DOM in render() now; charsPerLine only survives as a rough fallback for
+   the coarse row hit-test (whose column output is discarded by its callers). */
 function computeCharsPerLine(){
   const w=stack.clientWidth - 2*16;   // minus left+right --pad-x
   charsPerLine=Math.max(1, Math.floor(w/charW));
@@ -1660,7 +1668,7 @@ function deleteDoc(id){
   else renderDocs();
   persist();
 }
-/* Inline rename inside the rest menu (double-click a row). */
+/* Inline rename of a document row (invoked from the context menu). */
 function beginRename(id, nameEl){
   const d=store.docs.find(x=>x.id===id);
   if(!d || d.protected || !nameEl) return;
@@ -1707,9 +1715,10 @@ function renderDocFind(){
     const active=d.id===store.activeId?' active':'';
     const cnt=q ? countMatches((d.id===store.activeId?input.value:(d.text||'')), q) : 0;
     const badge=cnt>0 ? '<span class="doc-badge">'+cnt+'</span>' : '';
-    const del=d.protected ? '' : '<button class="doc-del" data-id="'+d.id+'" title="удалить документ">×</button>';
-    return '<div class="doc-item'+active+'" data-id="'+d.id+'">'
-      +'<span class="doc-name">'+esc(d.name||'Без названия')+'</span>'+badge+del+'</div>';
+    // Rename/delete moved to a context menu (right-click / long-press); rows no
+    // longer carry an inline × button.
+    return '<div class="doc-item'+active+(d.protected?' protected':'')+'" data-id="'+d.id+'">'
+      +'<span class="doc-name">'+esc(d.name||'Без названия')+'</span>'+badge+'</div>';
   }).join('');
 }
 
@@ -2243,6 +2252,7 @@ function closeMenus(){
   MENU_IDS.forEach(id=>{ const m=$(id); if(m) m.hidden=true; });
   Object.values(MENU_BTNS).forEach(bid=>{ const b=$(bid); if(b) b.setAttribute('aria-expanded','false'); });
   openMenuId=null;
+  closeDocMenu();
 }
 function clampMenu(m){
   m.style.left='0px';
@@ -2307,6 +2317,17 @@ function openLineMenu(x,y,i){
   linemenu.classList.add('open');
 }
 function closeLineMenu(){ linemenu.classList.remove('open'); lineMenuTarget=-1; }
+/* ---------- document context menu (rename / delete a document) ---------- */
+let docMenuTarget=null;
+function openDocMenu(x,y,id){
+  const d=store.docs.find(v=>v.id===id);
+  if(!d || d.protected) return;               // pinned docs can't be renamed/deleted
+  docMenuTarget=id;
+  docmenu.style.left=Math.min(x, window.innerWidth-176)+'px';
+  docmenu.style.top=Math.min(y, window.innerHeight-96)+'px';
+  docmenu.classList.add('open');
+}
+function closeDocMenu(){ docmenu.classList.remove('open'); docMenuTarget=null; }
 function onStackCtx(e){
   const {row}=hitTest(e.clientX,e.clientY);
   const lines=model?model.data.lines:[];
@@ -3096,10 +3117,12 @@ function boot(){
   document.addEventListener('click', e=>{
     if(!ctxmenu.contains(e.target)) closeCtxMenu();
     if(!linemenu.contains(e.target)) closeLineMenu();
+    if(!docmenu.contains(e.target)) closeDocMenu();
   });
   document.addEventListener('contextmenu', e=>{
     if(!e.target.closest('#gutter')&&!ctxmenu.contains(e.target)) closeCtxMenu();
     if(!e.target.closest('#stack')&&!linemenu.contains(e.target)) closeLineMenu();
+    if(!e.target.closest('#docfind-list')&&!docmenu.contains(e.target)) closeDocMenu();
   });
 
   // add a tag by pressing Enter (the "+" button is gone)
@@ -3147,50 +3170,73 @@ function boot(){
     if(e.key==='Enter'){ e.preventDefault(); const first=$('docfind-list').querySelector('.doc-item'); if(first) switchDoc(first.dataset.id); }
     else if(e.key==='Escape'){ e.preventDefault(); closeMenus(); }
   });
-  // Row activation is split by input type so the FIRST tap always lands:
-  //   • touch → switch immediately on a stationary tap (touchend), before the
-  //     trailing synthetic click that a keyboard-dismiss reflow or the desktop
-  //     dblclick timer could otherwise swallow (that was the "needs two taps"
-  //     bug). A moved finger is a scroll, not a tap, so it's ignored.
-  //   • mouse → click switches, deferred briefly so a dblclick can rename.
-  let docRowClickTimer=null, touchHandledAt=0, tX=0, tY=0, tMoved=false;
+  // Row interaction:
+  //   • tap / left-click → open the document (first tap always lands: touch
+  //     switches on a stationary touchend, before the trailing synthetic click
+  //     a keyboard-dismiss reflow could swallow; a moved finger is a scroll).
+  //   • long-press (touch) / right-click (mouse) → rename-or-delete menu.
+  let touchHandledAt=0, tX=0, tY=0, tMoved=false, docHoldTimer=null, docHoldFired=false;
+  const cancelDocHold=()=>{ if(docHoldTimer){ clearTimeout(docHoldTimer); docHoldTimer=null; } };
   $('docfind-list').addEventListener('touchstart', e=>{
-    const t=e.changedTouches[0]; tX=t.clientX; tY=t.clientY; tMoved=false;
+    const t=e.changedTouches[0]; tX=t.clientX; tY=t.clientY; tMoved=false; docHoldFired=false;
+    cancelDocHold();
+    const item=e.target.closest('.doc-item');
+    if(item && e.touches.length===1){
+      const id=item.dataset.id;
+      docHoldTimer=setTimeout(()=>{
+        docHoldTimer=null; docHoldFired=true;
+        openDocMenu(tX, tY, id);                        // no-op for pinned docs
+        if(navigator.vibrate){ try{ navigator.vibrate(12); }catch(err){} }
+      }, 480);
+    }
   }, {passive:true});
   $('docfind-list').addEventListener('touchmove', e=>{
     const t=e.changedTouches[0];
-    if(Math.abs(t.clientX-tX)>10 || Math.abs(t.clientY-tY)>10) tMoved=true;
+    if(Math.abs(t.clientX-tX)>10 || Math.abs(t.clientY-tY)>10){ tMoved=true; cancelDocHold(); }
   }, {passive:true});
   $('docfind-list').addEventListener('touchend', e=>{
-    if(tMoved) return;                                 // was a scroll, not a tap
-    if(e.target.closest('.doc-name-input')) return;    // typing a new name
-    const del=e.target.closest('.doc-del');
-    if(del){ e.preventDefault(); touchHandledAt=Date.now(); requestDeleteDoc(del.dataset.id); return; }
+    cancelDocHold();
+    if(docHoldFired){ e.preventDefault(); return; }     // long-press already opened the menu
+    if(tMoved) return;                                  // was a scroll, not a tap
+    if(e.target.closest('.doc-name-input')) return;     // typing a new name
     const item=e.target.closest('.doc-item'); if(!item) return;
-    e.preventDefault();                                // suppress the trailing synthetic click
+    e.preventDefault();                                 // suppress the trailing synthetic click
     touchHandledAt=Date.now();
-    switchDoc(item.dataset.id);                         // immediate — first tap opens
+    switchDoc(item.dataset.id);                          // immediate — first tap opens
   });
   $('docfind-list').addEventListener('click', e=>{
-    if(Date.now()-touchHandledAt < 700) return;        // touchend already handled this tap
-    const del=e.target.closest('.doc-del');
-    if(del){ e.stopPropagation(); clearTimeout(docRowClickTimer); requestDeleteDoc(del.dataset.id); return; }
-    if(e.target.closest('.doc-name-input')) return;    // typing a new name, not navigating
+    if(Date.now()-touchHandledAt < 700) return;         // touchend already handled this tap
+    if(e.target.closest('.doc-name-input')) return;     // typing a new name, not navigating
     const item=e.target.closest('.doc-item'); if(!item) return;
-    const id=item.dataset.id;
-    clearTimeout(docRowClickTimer);
-    docRowClickTimer=setTimeout(()=>switchDoc(id), 220);
+    switchDoc(item.dataset.id);
   });
-  $('docfind-list').addEventListener('dblclick', e=>{
+  $('docfind-list').addEventListener('contextmenu', e=>{
     const item=e.target.closest('.doc-item'); if(!item) return;
-    clearTimeout(docRowClickTimer);
-    const nameEl=item.querySelector('.doc-name'); if(nameEl) beginRename(item.dataset.id, nameEl);
+    e.preventDefault();
+    openDocMenu(e.clientX, e.clientY, item.dataset.id);  // no-op for pinned docs
+  });
+  // rename / delete from the document context menu
+  docmenu.addEventListener('click', e=>{
+    const btn=e.target.closest('.lm-item'); if(!btn) return;
+    const id=docMenuTarget; closeDocMenu();
+    if(!id) return;
+    if(btn.dataset.act==='rename'){
+      const nameEl=document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name');
+      if(nameEl) beginRename(id, nameEl);
+    } else if(btn.dataset.act==='delete'){
+      requestDeleteDoc(id);
+    }
   });
   // close any open dropdown on outside click / Escape
   document.addEventListener('click', e=>{
-    if(openMenuId && !e.target.closest('.tb-menu') && !e.target.closest('#brand-btn,#doc-find-btn')) closeMenus();
+    // a click inside the doc context menu must not close the loupe under it
+    if(openMenuId && !e.target.closest('.tb-menu') && !e.target.closest('#brand-btn,#doc-find-btn') && !e.target.closest('#docmenu')) closeMenus();
   });
-  document.addEventListener('keydown', e=>{ if(e.key==='Escape' && openMenuId) closeMenus(); });
+  document.addEventListener('keydown', e=>{
+    if(e.key!=='Escape') return;
+    if(docmenu.classList.contains('open')){ closeDocMenu(); return; }   // Esc closes the doc menu first
+    if(openMenuId) closeMenus();
+  });
 
   // confirmation dialog
   $('confirm-ok').addEventListener('click', ()=>closeConfirm(true));
