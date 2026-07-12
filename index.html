@@ -2157,9 +2157,19 @@ function transformDoubleplus(){
     return true;
   }
 
-  const endM=/^(\s*)(\S.*?)\+\+$/.exec(line) || /^(\s*)(\S.*)\s[хХxX]{2}$/.exec(line);
+  const plusEnd=/^(\s*)(\S.*?)\+\+$/.exec(line);
+  const xxEnd = plusEnd ? null : /^(\s*)(\S.*)\s[хХxX]{2}$/.exec(line);
+  const endM=plusEnd||xxEnd;
   if(endM){
-    const rebuilt=endM[1]+'[ ] '+endM[2];
+    // "хх" means DONE: it checks an existing box (never doubles the marker,
+    // which "[ ] дело хх" used to do) and creates an already-checked box on
+    // a plain line. "++" keeps creating an unchecked box; on a line that is
+    // already a checkbox it just consumes the typed marker.
+    const body=endM[2];
+    const cb=/^\[([ xX])\]\s?(.*)$/.exec(body);
+    const rebuilt = cb
+      ? endM[1]+'['+(xxEnd?'x':cb[1])+'] '+cb[2]
+      : endM[1]+'['+(xxEnd?'x':' ')+'] '+body;
     const before=val.slice(0,lineStart), after=val.slice(end);
     input.value=before+rebuilt+after;
     const delta=rebuilt.length-line.length;
@@ -3530,6 +3540,9 @@ function boot(){
   document.addEventListener('mouseup', onGutterUp);
   gutter.addEventListener('contextmenu', onGutterCtx);
 
+  // copying a result must not steal the caret: killing the mousedown's
+  // default keeps focus in the editor (results are inert text anyway)
+  results.addEventListener('mousedown', e=>e.preventDefault());
   results.addEventListener('click', onResultsClick);
   results.addEventListener('mouseover', onResultHover);
   results.addEventListener('mouseleave', onResultLeave);
