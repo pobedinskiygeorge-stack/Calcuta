@@ -1998,6 +1998,9 @@ function openFind(){
 }
 function closeFind(){
   $('findbar').classList.remove('open');
+  // Closing dismisses the search entirely: highlights vanish, the query and
+  // the match counter reset, so the next Ctrl+F starts from a clean box.
+  setSearchQuery('', 'close');
   input.focus();
 }
 
