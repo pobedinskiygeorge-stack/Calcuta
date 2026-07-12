@@ -138,8 +138,10 @@ button{font-family:inherit;color:inherit}
 .bm-item.active .bm-check{visibility:visible}
 .bm-item .bm-ic{width:15px;flex:0 0 auto;opacity:.8}
 
-/* document tabs: Задачи · Личное · лупа. Tab names are plain white; the
-   open one is marked by the gray background alone. */
+/* document tabs: Задачи · Личное · третий слот. Tab names are plain white;
+   the open one is marked by the gray background alone. The third slot shows
+   the open non-pinned document's name (or a dim "документы" placeholder when
+   a pinned doc is open) and opens the document manager popover. */
 .doc-tabs{display:flex;align-items:center;gap:4px;min-width:0;margin-left:24px}
 .doc-tab{
   flex:0 0 auto;max-width:170px;padding:5px 11px;border-radius:8px;border:1px solid transparent;
@@ -148,6 +150,7 @@ button{font-family:inherit;color:inherit}
 }
 .doc-tab:hover{background:var(--bg-editor)}
 .doc-tab.active{background:var(--bg-editor);border-color:var(--border)}
+.doc-tab.placeholder{color:var(--dim)}
 /* the loupe popover: the whole document manager (search, create, list) */
 .docfind-menu{width:270px;max-width:calc(100vw - 20px)}
 .docfind-menu input{
@@ -571,7 +574,7 @@ button{font-family:inherit;color:inherit}
         <button class="doc-tab" id="tab-tasks" data-id="stock-tasks" type="button">Задачи</button>
         <button class="doc-tab" id="tab-personal" data-id="stock-personal" type="button">Личное</button>
         <div class="tb-menu-wrap">
-          <button class="icon-btn" id="doc-find-btn" type="button" title="документы" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M10 4a6 6 0 014.47 10l4.26 4.26-1.42 1.42L13.04 15.4A6 6 0 1110 4zm0 2a4 4 0 100 8 4 4 0 000-8z"/></svg></button>
+          <button class="doc-tab" id="doc-find-btn" type="button" title="документы" aria-haspopup="true" aria-expanded="false">документы</button>
           <div class="tb-menu docfind-menu" id="docfind-menu" hidden>
             <input id="docfind-input" type="text" placeholder="найти документ…" autocomplete="off" spellcheck="false">
             <button class="doc-add-row" id="doc-add" type="button">+ новый документ</button>
@@ -688,10 +691,14 @@ function isDateMatch(d,m){ d=+d;m=+m; return d>=1&&d<=31&&m>=1&&m<=12; }
 function dateAt(s){ const m=s.match(new RegExp('^'+DATE_SRC)); return (m && isDateMatch(m[1],m[2]))?m:null; }
 
 /* ---- Number token regex.
-   Alt 1: space/NBSP-grouped thousands ("2 500 000", "1 234,5").
-   Alt 2: plain / NBSP-run / suffixed ("2500000", "500k", "12,5").
-   Regular space (U+0020) and NBSP (U+202F) both act as group separators. ---- */
-const NUM_RE = /\d{1,3}(?:[ \u202f]\d{3})+(?:[.,]\d+)?|\d[\d\u202f]*(?:[.,]\d+)?(?:[kKM])?/;
+   Alt 1: space-grouped thousands ("2 500 000", "1 234,5"). The separator class
+   covers every space web/office content uses for digit grouping (U+0020,
+   U+00A0, U+2007-U+200A, U+202F, U+205F) so numbers stay recognized even when
+   text arrived without paste normalization (old app versions, cloud sync).
+   A separator only joins when EXACTLY three digits follow, so U+00A0 operator
+   padding ("100 + 200") can never glue numbers together.
+   Alt 2: plain / NBSP-run / suffixed ("2500000", "500k", "12,5"). ---- */
+const NUM_RE = /\d{1,3}(?:[ \u00a0\u2007\u2008\u2009\u200a\u202f\u205f]\d{3})+(?:[.,]\d+)?|\d[\d\u202f]*(?:[.,]\d+)?(?:[kKM])?/;
 
 /* ================================================================
    Tokenizer for math evaluation.
@@ -748,11 +755,31 @@ function tokenizeMath(text, vars){
       let matchedVar = matchVarAt(text, i, varNames);
       if(matchedVar){ toks.push({t:'var',name:matchedVar.name}); i+=matchedVar.len; continue; }
       const w = wm[0].toLowerCase();
-      if(w==='of'){ toks.push({t:'of'}); i+=wm[0].length; continue; }
+      const prev = toks[toks.length-1];
+      const prevIsValue = prev && (prev.t==='num'||prev.t===')'||prev.t==='var'||prev.t==='agg'||prev.t==='%');
+      // 'of' is the percent-of operator ONLY right after a value ("20% of 500").
+      // In prose ("The Buddha of Suburbia (1993)") it used to become a dangling
+      // operator that made the whole line unparseable — killing the result and
+      // the number highlight. Now such an 'of' is plain context.
+      if(w==='of'){ if(prevIsValue) toks.push({t:'of'}); i+=wm[0].length; continue; }
       if(KEYWORDS.has(w)){ toks.push({t:'agg',v:w}); i+=wm[0].length; continue; }
       i+=wm[0].length; continue; // context word -> ignore
     }
     i++; // unknown char -> skip
+  }
+  // Post-pass: an aggregation keyword sitting right NEXT to a value in the
+  // token stream ("сумма заказа 1 500" → [agg,num], "1500 сумма" → [num,agg],
+  // "сумма (1+2)" → [agg,(...]) could never parse — evaluate() always returned
+  // null, so the line lost its result and its numbers stayed unhighlighted.
+  // Such a keyword is prose context, not an aggregation: drop the token.
+  // Real aggregation lines (keyword alone, or with operators: "sum", "sum*2",
+  // "sum - 100") keep their agg token unchanged.
+  for(let k=toks.length-1;k>=0;k--){
+    if(toks[k].t!=='agg') continue;
+    const nx=toks[k+1], pv=toks[k-1];
+    const nxIsValue=nx && (nx.t==='num'||nx.t==='var'||nx.t==='agg'||nx.t==='(');
+    const pvIsValue=pv && (pv.t==='num'||pv.t===')'||pv.t==='var'||pv.t==='%');
+    if(nxIsValue||pvIsValue) toks.splice(k,1);
   }
   return toks;
 }
@@ -1688,18 +1715,26 @@ function beginRename(id, nameEl){
   inp.addEventListener('click', e=>e.stopPropagation());
   inp.addEventListener('dblclick', e=>e.stopPropagation());
 }
-/* Update the top-bar doc UI: pinned button states + the loupe list. */
+/* Update the top-bar doc UI: pinned button states, the third slot's label
+   (open non-pinned doc's name, or a dim placeholder), and the open list. */
 function renderDocs(){
   const d=doc();
-  const tt=$('tab-tasks'), tp=$('tab-personal');
+  const tt=$('tab-tasks'), tp=$('tab-personal'), fb=$('doc-find-btn');
   if(tt) tt.classList.toggle('active', !!d && d.protected==='tasks');
   if(tp) tp.classList.toggle('active', !!d && d.protected==='personal');
+  if(fb){
+    const other=(d && !d.protected) ? d : null;
+    fb.textContent=other ? (other.name||'Без названия') : 'документы';
+    fb.classList.toggle('active', !!other);
+    fb.classList.toggle('placeholder', !other);
+  }
   if(docFindOpen()) renderDocFind();
 }
 
-/* ---------- the loupe popover: the whole document manager ----------
+/* ---------- the doc-name popover: the whole document manager ----------
+   Opens from the third top-bar slot (the open doc's name / "документы").
    Lists ALL documents (filtered by name/content while typing); click opens,
-   double-click renames inline, × deletes (stock pages have neither). */
+   right-click / long-press renames or deletes (stock pages have neither). */
 let docFindQuery='';
 function docFindOpen(){ const m=$('docfind-menu'); return m && !m.hidden; }
 function renderDocFind(){
@@ -2394,8 +2429,8 @@ function setRowFx(){
   clearRowFx();
   const rb=highlight.children;
   // The line merely under the cursor is intentionally NOT highlighted; a
-  // whole-line tint appears only as a "reference" — when hovering a result
-  // pill or a variable usage (→ its defining line), handled via srcRow.
+  // whole-line tint appears only when hovering a result pill (→ its source
+  // line), handled via srcRow.
   if(srcRow>=0 && rb[srcRow]){ rb[srcRow].classList.add('src'); const gl=gutter.children[srcRow]; if(gl) gl.classList.add('src'); }
 }
 /* Given a y offset (already minus padY), find which source line it falls in
@@ -2526,13 +2561,9 @@ function onStackMove(e){
   const pillRng=hoverRow>=0 ? varPillRangeAt(hoverRow,col) : null;
   if(pillRng) showPillHover(hoverRow, pillRng.start, pillRng.end);
   else hidePillHover();
-  if(hoverRow>=0 && model.meta[hoverRow]){
-    const meta=model.meta[hoverRow][col];
-    // Only a variable usage lights its source line (the "отсылка" back to
-    // where it was defined). Plain numbers/operators no longer self-highlight
-    // the current line — the line under the cursor stays untinted.
-    if(meta && meta.type==='var' && meta.defLine!==undefined && meta.defLine!==null) srcRow=meta.defLine;
-  }
+  // Hovering a variable shows ONLY its oval pill — no whole-line tint at all.
+  // The full-line "reference" highlight remains solely on result-pill hover
+  // (onResultHover below).
   setRowFx();
 }
 function onStackLeave(){ hoverRow=-1; srcRow=-1; hidePillHover(); setRowFx(); }
@@ -2591,7 +2622,9 @@ function stripOnCopy(e){
   const ta=input;
   const s=ta.selectionStart, en=ta.selectionEnd;
   if(document.activeElement===ta && en>s){
-    const txt=ta.value.slice(s,en).replace(GROUP_RE,'').replace(/ /g,' ');  // strip grouping, op-pad→space
+    // strip grouping, op-pad→space, and the invisible result-pill sentinel —
+    // copied text must paste as clean, computable numbers everywhere
+    const txt=ta.value.slice(s,en).replace(GROUP_RE,'').replace(/ /g,' ').replace(/⁣/g,'');
     e.clipboardData.setData('text/plain',txt);
     e.preventDefault();
     if(e.type==='cut'){
@@ -2613,11 +2646,26 @@ function normalizePasted(txt){
   // pasted from mail/spreadsheets/Word to app format so they're recognized as
   // real numbers and take part in math: the decimal separator (dot or comma)
   // becomes a comma and thousands regroup.
-  // 1) normalize the non-breaking / narrow / thin spaces web content uses for
-  //    grouping into a regular space, then 2) collapse genuine space-grouped
-  //    thousands ("1 234 567,89" → "1234567,89") so the decimal-aware pass sees
-  //    a clean number (a lone "17 6" is NOT collapsed — "6" isn't a 3-digit group).
-  txt = txt.replace(/[   ]/g, ' ');
+  // 0) strip invisible zero-width/soft-hyphen junk that web pages embed inside
+  //    digit runs (it silently splits a number into unrecognizable pieces), and
+  //    turn the typographic minus into the ASCII one. Zero-width chars are only
+  //    removed next to a digit so emoji ZWJ sequences stay intact.
+  txt = txt.replace(/[\u200B\u200C\u200D\u2060\uFEFF\u00AD]+(?=\d)/g, '')
+           .replace(/(?<=\d)[\u200B\u200C\u200D\u2060\uFEFF\u00AD]+/g, '')
+           .replace(/\u2212/g, '-');
+  // 0b) Swiss apostrophe grouping ("1'234'567.89") → plain digits
+  txt = txt.replace(/\d{1,3}(?:['\u2019]\d{3})+(?![\d'])/g, s => s.replace(/['\u2019]/g,''));
+  // 0c) multi-group comma/dot thousands WITHOUT a decimal part ("1,234,567",
+  //     "1.234.567") → plain digits. Two-plus groups make the intent
+  //     unambiguous; a single "2,013" stays a decimal (comma = decimal here).
+  txt = txt.replace(/(?<![\d.,])\d{1,3}(?:,\d{3}){2,}(?!\d)/g, s => s.replace(/,/g,''));
+  txt = txt.replace(/(?<![\d.,])\d{1,3}(?:\.\d{3}){2,}(?!\d)/g, s => s.replace(/\./g,''));
+  // 1) normalize the non-breaking / narrow / thin / figure spaces web content
+  //    uses for grouping into a regular space, then 2) collapse genuine
+  //    space-grouped thousands ("1 234 567,89" → "1234567,89") so the
+  //    decimal-aware pass sees a clean number (a lone "17 6" is NOT collapsed —
+  //    "6" isn't a 3-digit group).
+  txt = txt.replace(/[\u00a0\u2007\u2008\u2009\u200a\u202f\u205f]/g, ' ');
   txt = txt.replace(/\d{1,3}(?: \d{3})+(?:[.,]\d+)?/g, s => s.replace(/ /g, ''));
   return txt.replace(/\d[\d.,]*\d|\d/g, (m)=>{
     const dm=dateAt(m); if(dm && dm[0]===m) return m;   // keep pure dates
