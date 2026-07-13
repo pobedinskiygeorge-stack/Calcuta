@@ -1540,6 +1540,7 @@ const STORE_KEY='calcuta.v2';
    line-number colors live per document. */
 let store={ docs:[], activeId:null, tags:[], tagsUpdated:0, deletedDocs:{}, deletedTags:{}, pinned:[] };
 let prevResultVals={}, resultsPainted=false;   // for the result-pill fade animation
+let lastCopiedResult=null;   // {v, at}: last result copied from the column
 function doc(){ return store.docs.find(d=>d.id===store.activeId) || store.docs[0]; }
 function uid(){ return 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 let model=null;            // last analyze() + per-line meta
@@ -3007,6 +3008,13 @@ function onPaste(e){
   const txt=(e.clipboardData||window.clipboardData).getData('text');
   if(!txt) return;
   e.preventDefault();
+  // Pasting a result you just copied from the column drops it as a distinct,
+  // atomic PILL entity (SENT + number) rather than loose text — it still
+  // reads as a number for math, but edits/deletes as one unit and is outlined.
+  if(lastCopiedResult && Date.now()-lastCopiedResult.at < 120000 && txt.trim()===lastCopiedResult.v){
+    document.execCommand('insertText', false, SENT+lastCopiedResult.v);
+    return;
+  }
   const normalized=normalizePasted(txt);
   document.execCommand('insertText',false,normalized);
 }
@@ -3136,6 +3144,7 @@ function onResultsClick(e){
   // pastes as a real, computable number into Sheets/Excel/Word etc. Pasting it
   // back into Calcuta is fine too — normalizePasted keeps it a usable number.
   copyText(v);
+  lastCopiedResult={v, at:Date.now()};   // so pasting it back becomes a pill
   el.classList.add('copied');
   setTimeout(()=>el.classList.remove('copied'),450);
   showToast('Скопировано: '+v);
