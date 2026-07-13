@@ -102,6 +102,12 @@
 }
 
 *{box-sizing:border-box}
+/* Never let mobile browsers auto-inflate text ("text autosizing"). A <textarea>
+   and a <pre>/<div> get inflated by DIFFERENT factors, so the invisible input
+   layer lays its text out taller/wider than the colored overlay — the native
+   caret (input layout) then drifts away from the visible glyphs (overlay
+   layout). Pinning to 100% makes both layers lay out identically. */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 html,body{height:100%}
 body{
   margin:0;background:var(--bg);color:var(--text);
