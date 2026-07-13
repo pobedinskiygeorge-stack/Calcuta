@@ -434,6 +434,11 @@ button{font-family:inherit;color:inherit}
 }
 .result-line.has:hover .pill{background:rgba(160,158,150,.28);color:var(--text-strong)}
 .result-line.copied .pill{background:var(--accent);color:#fff}
+/* calc error: a muted "??" token, not copyable */
+.result-line .pill.err{background:rgba(201,100,66,.14);color:var(--accent);cursor:default}
+/* gentle fade when a result value appears or changes (only the changed pill) */
+@keyframes pill-fade{from{opacity:.15}to{opacity:1}}
+.result-line .pill.changed{animation:pill-fade .28s ease}
 
 /* context menu (line-number colors) */
 #ctxmenu{
@@ -746,6 +751,24 @@ const DATE_SRC = '(\\d{1,2})\\.(\\d{2})(?:\\.(\\d{2,4}))?(?!\\d)';
 const DATE_RE = new RegExp('\\b'+DATE_SRC);
 function isDateMatch(d,m){ d=+d;m=+m; return d>=1&&d<=31&&m>=1&&m<=12; }
 function dateAt(s){ const m=s.match(new RegExp('^'+DATE_SRC)); return (m && isDateMatch(m[1],m[2]))?m:null; }
+function normYear(y){ y=+y; return y<100 ? 2000+y : y; }
+/* A whole-line date range "21.08 - 25.08" -> number of days between them (4).
+   Optional years; without years, an end earlier than the start wraps to next
+   year ("25.12 - 05.01" = 11). Returns a day count or null (not a range). */
+const DATE_RANGE_RE = new RegExp('^'+DATE_SRC+'\\s*[-\\u2013\\u2014]\\s*'+DATE_SRC+'$');
+function dateRangeDays(s){
+  const m = s.trim().match(DATE_RANGE_RE);
+  if(!m) return null;
+  if(!isDateMatch(m[1],m[2]) || !isDateMatch(m[4],m[5])) return null;
+  const nowY = new Date().getFullYear();
+  const y1 = m[3] ? normYear(m[3]) : nowY;
+  const d1 = new Date(y1, +m[2]-1, +m[1]);
+  let y2 = m[6] ? normYear(m[6]) : y1;
+  let d2 = new Date(y2, +m[5]-1, +m[4]);
+  if(!m[6] && d2 < d1) d2 = new Date(y1+1, +m[5]-1, +m[4]);   // wrap to next year
+  const days = Math.round((d2 - d1) / 86400000);
+  return isFinite(days) ? days : null;
+}
 
 /* ---- Number token regex.
    Alt 1: space-grouped thousands ("2 500 000", "1 234,5"). The separator class
@@ -900,6 +923,11 @@ function dateTriggerLenAt(text, i){
    Values carry a `pct` flag for percentage semantics.
    Returns a JS number or null.
    ================================================================ */
+/* Sentinel: a CLEANLY parsed expression that produced a non-finite value
+   (division by zero, overflow). Distinct from null ("no expression at all")
+   so the results column can show "??" for a real error but stay blank for a
+   plain text line. Contained entirely within evaluate()/evaluateLenient(). */
+const EVAL_ERR = {__err:true};
 function evaluate(toks, scope, ctx){
   let p=0;
   const peek=()=>toks[p];
@@ -976,7 +1004,7 @@ function evaluate(toks, scope, ctx){
     const r=parseExpr();
     if(p!==toks.length) return null;      // leftover tokens -> not a clean expression
     const out = r.pct ? r.v/100 : r.v;
-    return isFinite(out) ? out : null;
+    return isFinite(out) ? out : EVAL_ERR;   // clean expr, bad value -> error
   }catch(e){ return null; }
 }
 
@@ -992,6 +1020,7 @@ function evaluate(toks, scope, ctx){
    participated - the highlighter uses it to leave ignored numbers unpainted. */
 function evaluateLenient(toks, scope, ctx){
   const direct = evaluate(toks, scope, ctx);
+  if(direct===EVAL_ERR) return {v:null, range:null, err:true};
   if(direct!==null || toks.length===0) return {v:direct, range:null};
   const endsVal  = t=>t==='num'||t===')'||t==='%'||t==='var'||t==='agg';
   const startsVal= t=>t==='num'||t==='('||t==='var'||t==='agg';
@@ -1014,6 +1043,7 @@ function evaluateLenient(toks, scope, ctx){
   }
   if(!target) return {v:null, range:null};
   const v=evaluate(target, scope, ctx);
+  if(v===EVAL_ERR) return {v:null, range:null, err:true};
   return v===null ? {v:null, range:null}
                   : {v, range:[target[0].s, target[target.length-1].e]};
 }
@@ -1113,7 +1143,7 @@ function analyze(text){
     const varDefLine=varDefLineBySection[sec] || (varDefLineBySection[sec]={});
     const content=line.slice(cls.markerLen);
     const isBlank=line.trim()==='';
-    let result=null, assignedName=null, calcRange=null;
+    let result=null, assignedName=null, calcRange=null, error=false, dateCount=false;
 
     // run boundary: blank line or "//" heading resets the contiguous block.
     // A "#" comment is transparent: it neither contributes nor breaks the
@@ -1134,6 +1164,7 @@ function analyze(text){
         if(v!==null){ scope[name]=v; result=v; assignedName=name;
           // rhs runs to end of line, so its offset within the line is exact
           if(lr.range){ const off=line.length-rhs.length; calcRange=[lr.range[0]+off, lr.range[1]+off]; } }
+        else if(lr.err) error=true;
         if(varDefLine[name]===undefined) varDefLine[name]=idx;
       }
     }
@@ -1145,6 +1176,12 @@ function analyze(text){
       result=lr.v;
       if(result!==null && hasRoundMarker(contentCode)) result=applyRoundMarker(result);
       if(result!==null && lr.range) calcRange=[lr.range[0]+cls.markerLen, lr.range[1]+cls.markerLen];
+      if(result===null && lr.err) error=true;
+      // a bare "dd.mm - dd.mm" range (no math) reports its day count
+      if(result===null && !error){
+        const dr=dateRangeDays(contentCode);
+        if(dr!==null){ result=dr; dateCount=true; }
+      }
     }
 
     // feed aggregation (skip boundary/heading lines)
@@ -1153,7 +1190,7 @@ function analyze(text){
       ctx.prev=result;
     }
 
-    out.push({raw:line, cls, content, result, assignedName, calcRange, section:sec});
+    out.push({raw:line, cls, content, result, assignedName, calcRange, error, dateCount, section:sec});
   });
 
   return {lines:out, varsBySection, varDefLineBySection, scopesBySection};
@@ -1502,6 +1539,7 @@ const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text, name and
    line-number colors live per document. */
 let store={ docs:[], activeId:null, tags:[], tagsUpdated:0, deletedDocs:{}, deletedTags:{}, pinned:[] };
+let prevResultVals={}, resultsPainted=false;   // for the result-pill fade animation
 function doc(){ return store.docs.find(d=>d.id===store.activeId) || store.docs[0]; }
 function uid(){ return 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 let model=null;            // last analyze() + per-line meta
@@ -1713,6 +1751,7 @@ function render(){
   selRangeLines=[-9,-9]; selectionGutterSync();   // re-mark selected-range numbers on the fresh cells
 
   let hs='', rs='';
+  const newResultVals={};
   for(let k=0;k<n;k++){
     const it=A.lines[k];
     const h=lineRowCount[k]*LH;
@@ -1721,13 +1760,24 @@ function render(){
       const left=(it.cls.indent||0)*charW + 16;   // + padX
       hs+='<div class="cbox-hit" data-i="'+k+'" style="top:'+top+'px;left:'+left+'px"></div>';
     }
-    if(it.result!==null){
-      rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'" style="height:'+h+'px">'
-        +'<span class="pill">'+esc(fmt(it.result))+'</span></div>';
+    if(it.result!==null || it.error){
+      const disp = it.error ? '\u2047' : fmt(it.result);   // U+2047 = "??" glyph
+      // fade a pill only when its shown value actually changed at this row
+      // (nice while typing); never on the very first paint of the document.
+      const anim = resultsPainted && prevResultVals[k]!==undefined && prevResultVals[k]!==disp ? ' changed' : '';
+      newResultVals[k]=disp;
+      if(it.error){
+        rs+='<div class="result-line err" data-i="'+k+'" style="height:'+h+'px">'
+          +'<span class="pill err'+anim+'">'+disp+'</span></div>';
+      }else{
+        rs+='<div class="result-line has" data-i="'+k+'" data-v="'+esc(plain(it.result))+'" style="height:'+h+'px">'
+          +'<span class="pill'+anim+'">'+esc(disp)+'</span></div>';
+      }
     }else{
       rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px"></div>';
     }
   }
+  prevResultVals=newResultVals; resultsPainted=true;
   hotspots.innerHTML=hs;
   results.innerHTML=rs;
 
