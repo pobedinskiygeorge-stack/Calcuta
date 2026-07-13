@@ -401,8 +401,12 @@ button{font-family:inherit;color:inherit}
    untouched (the outline extends over the spaces around the number). */
 /* Inline result pill: soft gray fill via box-shadow spread (no layout width
    change, no overhang) so operators keep their normal gap from the number. */
+/* Inline result pill: horizontal padding gives the same breathing room as the
+   results-column pill; the equal negative margin cancels the added layout
+   width so monospace alignment and the caret stay untouched (the fill just
+   overhangs the spaces around the number). */
 #highlight .rpill{color:var(--text-strong);border-radius:7px;
-  background:rgba(160,158,150,.20);box-shadow:0 0 0 2px rgba(160,158,150,.20)}
+  background:rgba(160,158,150,.22);padding:0 7px;margin:0 -7px}
 /* Link pill: soft blue fill + underline; opens on click via the #stack
    handler (this overlay is pointer-events:none, so the click passes through). */
 #highlight .link{color:var(--link);text-decoration:underline;text-underline-offset:2px;
@@ -2552,7 +2556,7 @@ function prevCharStart(s, pos, floor){
   if(i>floor) i--;
   return i;
 }
-/* ---------- variable autocomplete (shares #acbox with the !doc picker) ---------- */
+/* ---------- caret-anchored popup: the "!name" document-link picker ---------- */
 let acItems=[], acIndex=-1, acQueryStart=-1, acQueryEnd=-1, acKind=null;
 function acOpen(){ return !$('acbox').hidden; }
 function hideAutocomplete(){
@@ -2561,19 +2565,6 @@ function hideAutocomplete(){
 }
 /* The name-ish region typed right before the caret: {raw, base} or null.
    base = offset where raw begins. Skips comments and assignment LHS. */
-function nameRegionAtCaret(){
-  if(input.selectionStart!==input.selectionEnd) return null;
-  const pos=input.selectionStart;
-  const {row,col}=offsetToLineCol(pos);
-  const line=input.value.split('\n')[row];
-  const cs=lineCommentStart(line); if(cs>=0 && col>cs) return null;
-  const am=ASSIGN_RE.exec(line);
-  if(am){ const eq=line.indexOf('='); if(eq>=0 && col<=eq) return null; }   // naming a var
-  let s=col;
-  while(s>0 && /[\p{L}\d_ ]/u.test(line[s-1])) s--;
-  const raw=line.slice(s,col);
-  return { raw, base: pos-(col-s) };
-}
 /* A "!query" doc-link being typed right before the caret, or null.
    bang is at a word boundary; query is the doc-name text after it. */
 function docTokenAtCaret(){
@@ -2602,30 +2593,7 @@ function openDocPicker(dt){
 function refreshAutocomplete(){
   if(!model){ hideAutocomplete(); return; }
   const dt=docTokenAtCaret();
-  if(dt){ openDocPicker(dt); return; }       // "!name" doc-link picker takes priority
-  const reg=nameRegionAtCaret();
-  if(!reg){ hideAutocomplete(); return; }
-  const {row}=offsetToLineCol(input.selectionStart);
-  const item=model.data.lines[row]; if(!item){ hideAutocomplete(); return; }
-  const names=model.data.varsBySection[item.section];
-  const scope=model.data.scopesBySection[item.section];
-  if(!names || !names.size){ hideAutocomplete(); return; }
-  // try the longest word-suffix of the captured region that has matches, so
-  // "аренда 5 от да" still finds "от дани входные"
-  const starts=[0];
-  for(let k=1;k<reg.raw.length;k++) if(reg.raw[k-1]===' ' && reg.raw[k]!==' ') starts.push(k);
-  for(const st of starts){
-    const q=reg.raw.slice(st).toLowerCase();
-    if(q.length<2 || /^[\d ]/.test(q)) continue;
-    const matches=[...names]
-      .filter(n=> scope[n]!==undefined && n.startsWith(q) && n.length>q.length)
-      .sort((a,b)=> a.length-b.length || (a<b?-1:1)).slice(0,6);
-    if(matches.length){
-      acKind='var'; acQueryStart=reg.base+st; acQueryEnd=input.selectionStart; acIndex=0;
-      acItems=matches.map(n=>({label:n, insert:n, value:scope[n]}));
-      renderAutocomplete(); return;
-    }
-  }
+  if(dt){ openDocPicker(dt); return; }       // "!name" doc-link picker
   hideAutocomplete();
 }
 function renderAutocomplete(){
