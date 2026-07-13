@@ -157,6 +157,12 @@ button{font-family:inherit;color:inherit}
 .bm-item .bm-check{width:14px;flex:0 0 auto;color:var(--accent);visibility:hidden}
 .bm-item.active .bm-check{visibility:visible}
 .bm-item .bm-ic{width:15px;flex:0 0 auto;opacity:.8}
+/* theme choice: both options on one row; the active one is an oval pill */
+.theme-row{display:flex;gap:6px;padding:3px 4px}
+.theme-opt{flex:0 0 auto;padding:6px 15px;border:0;border-radius:999px;background:none;
+  color:var(--text);font-size:13px;cursor:pointer;font-family:inherit}
+.theme-opt:hover{background:var(--bg-editor)}
+.theme-opt.active{background:var(--accent-soft);color:var(--text-strong)}
 
 /* document tabs: Задачи · Личное · третий слот. Tab names are plain white;
    the open one is marked by the gray background alone. The third slot shows
@@ -412,8 +418,9 @@ button{font-family:inherit;color:inherit}
 #highlight .link{color:var(--link);text-decoration:underline;text-underline-offset:2px;
   border-radius:6px;background:rgba(111,178,240,.14);box-shadow:0 0 0 2px rgba(111,178,240,.14)}
 /* link to another Calcuta document ("!Название"): purple pill, click to open */
-#highlight .doclink{color:var(--super);border-radius:6px;
-  background:var(--super-soft);box-shadow:0 0 0 2px var(--super-soft)}
+/* link to another Calcuta document ("!Название"): same blue as a pasted URL,
+   underlined, but with no pill background — click to open the document */
+#highlight .doclink{color:var(--link);text-decoration:underline;text-underline-offset:2px}
 #highlight .checkmark{color:var(--result);font-weight:600}
 #highlight .cbox{color:var(--dim)}
 .hl-line.checked{color:var(--checked-text)}
@@ -595,13 +602,14 @@ button{font-family:inherit;color:inherit}
         <button class="brand-name" id="brand-btn" type="button" aria-haspopup="true" aria-expanded="false">calcuta</button>
         <div class="tb-menu brand-menu" id="brand-menu" role="menu" hidden>
           <div class="bm-title">Документ</div>
-          <button class="bm-item" id="exp-word" type="button"><span class="bm-ic">📄</span>Скачать Word</button>
-          <button class="bm-item" id="exp-pdf" type="button"><span class="bm-ic">📕</span>Скачать PDF</button>
-          <button class="bm-item" id="share-link" type="button"><span class="bm-ic">🔗</span>Поделиться ссылкой</button>
+          <button class="bm-item" id="exp-pdf" type="button">pdf</button>
+          <button class="bm-item" id="exp-word" type="button">word</button>
+          <button class="bm-item" id="share-link" type="button">url</button>
           <div class="bm-sep"></div>
-          <div class="bm-title">Тема</div>
-          <button class="bm-item" data-theme="dark" role="menuitemradio" type="button"><span class="bm-check">✓</span>Тёмная</button>
-          <button class="bm-item" data-theme="light" role="menuitemradio" type="button"><span class="bm-check">✓</span>Светлая</button>
+          <div class="theme-row">
+            <button class="theme-opt" data-theme="dark" type="button">Тёмная</button>
+            <button class="theme-opt" data-theme="light" type="button">Светлая</button>
+          </div>
           <div class="bm-sep"></div>
           <div class="bm-title">Тэги</div>
           <div class="tag-form">
@@ -2823,7 +2831,7 @@ const THEME_KEY='calcuta.theme';
 function currentTheme(){ try{ return localStorage.getItem(THEME_KEY)||'dark'; }catch(e){ return 'dark'; } }
 function applyTheme(t){
   document.documentElement.classList.toggle('light', t==='light');
-  document.querySelectorAll('#brand-menu .bm-item').forEach(b=>b.classList.toggle('active', b.dataset.theme===t));
+  document.querySelectorAll('#brand-menu .theme-opt').forEach(b=>b.classList.toggle('active', b.dataset.theme===t));
 }
 function setTheme(t){ try{ localStorage.setItem(THEME_KEY,t); }catch(e){} applyTheme(t); }
 
@@ -3966,11 +3974,12 @@ function boot(){
   $('doc-find-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('docfind-menu'); });
   // theme choice inside the calcuta menu (menu stays open for further tweaks)
   $('brand-menu').addEventListener('click', e=>{
+    const th=e.target.closest('.theme-opt');
+    if(th){ setTheme(th.dataset.theme); return; }   // stays open for further tweaks
     const it=e.target.closest('.bm-item'); if(!it) return;
     if(it.id==='exp-word'){ exportWord(); closeMenus(); return; }
     if(it.id==='exp-pdf'){ exportPDF(); closeMenus(); return; }
     if(it.id==='share-link'){ shareLink(); closeMenus(); return; }
-    if(it.dataset.theme) setTheme(it.dataset.theme);
   });
   // pinned document tabs
   $('tab-tasks').addEventListener('click', ()=>switchDoc(TASKS_ID));
