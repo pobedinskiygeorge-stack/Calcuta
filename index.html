@@ -407,6 +407,9 @@ button{font-family:inherit;color:inherit}
    handler (this overlay is pointer-events:none, so the click passes through). */
 #highlight .link{color:var(--link);text-decoration:underline;text-underline-offset:2px;
   border-radius:6px;background:rgba(111,178,240,.14);box-shadow:0 0 0 2px rgba(111,178,240,.14)}
+/* link to another Calcuta document ("!Название"): purple pill, click to open */
+#highlight .doclink{color:var(--super);border-radius:6px;
+  background:var(--super-soft);box-shadow:0 0 0 2px var(--super-soft)}
 #highlight .checkmark{color:var(--result);font-weight:600}
 #highlight .cbox{color:var(--dim)}
 .hl-line.checked{color:var(--checked-text)}
@@ -1242,7 +1245,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const cr = item.calcRange;
   const inCalc = k => !cr || (k>=cr[0] && k<cr[1]);
   // char-class array; higher priority overrides
-  const P={base:0, num:1, date:2, op:3, label:4, quote:5, tag:6, varr:7, link:8, cmt:9};
+  const P={base:0, num:1, date:2, op:3, label:4, quote:5, tag:6, varr:7, link:8, doclink:9, cmt:10};
   const cclass=new Array(len).fill('');   // css class per char
   const cmeta =new Array(len).fill(null); // {type, defLine} for hover
   const prio  =new Array(len).fill(-1);
@@ -1415,6 +1418,15 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     paint(r.start, r.end, 'link', P.link, {type:'link', url:r.url});
   }
 
+  // ---- "!документ" links to other Calcuta documents (never on a heading or
+  //      inside a "#" comment: those lines stay their own uniform style) ----
+  if(cls.kind!=='super' && cls.kind!=='header') for(let i=bodyStart;i<len;i++){
+    if(cmtStart>=0 && i>=cmtStart) break;
+    if(raw[i]!=='!') continue;
+    const dl=docLinkAt(raw, i);
+    if(dl){ paint(i, i+1+dl.len, 'doclink', P.doclink, {type:'doclink', docId:dl.id}); i+=dl.len; }
+  }
+
   // ---- copied-result pills: a SENT marker → render the number that follows
   //      it (with an optional leading minus) in an inline oval pill. ----
   for(let s=bodyStart;s<len;s++){
@@ -1461,6 +1473,23 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
 }
 
 function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+/* Longest existing document name matching right after a "!" at position i
+   (word-boundary aware). Returns {len,id,name} or null. Used to paint
+   "!документ" as a clickable link to that Calcuta document. */
+function docLinkAt(raw, i){
+  if(raw[i]!=='!') return null;
+  const before=raw[i-1]||' ';
+  if(/[\p{L}\d_]/u.test(before)) return null;
+  let best=null;
+  for(const d of store.docs){
+    const nm=d.name||''; if(!nm) continue;
+    if(raw.substr(i+1, nm.length).toLowerCase()===nm.toLowerCase()){
+      const after=raw[i+1+nm.length]||' ';
+      if(!/[\p{L}\d_]/u.test(after) && (!best || nm.length>best.len)) best={len:nm.length, id:d.id, name:nm};
+    }
+  }
+  return best;
+}
 
 /* Start index of an inline "#" comment in a single line, or -1.
    Shell-like rules: the "#" must be at position 0 or preceded by whitespace
@@ -2533,9 +2562,35 @@ function nameRegionAtCaret(){
   const raw=line.slice(s,col);
   return { raw, base: pos-(col-s) };
 }
+/* A "!query" doc-link being typed right before the caret, or null.
+   bang is at a word boundary; query is the doc-name text after it. */
+function docTokenAtCaret(){
+  if(input.selectionStart!==input.selectionEnd) return null;
+  const pos=input.selectionStart;
+  const {row,col}=offsetToLineCol(pos);
+  const line=input.value.split('\n')[row];
+  const cs=lineCommentStart(line); if(cs>=0 && col>cs) return null;
+  let s=col;
+  while(s>0 && /[\p{L}\d_ ]/u.test(line[s-1])) s--;
+  if(s>0 && line[s-1]==='!' && (s-2<0 || !/[\p{L}\d_]/u.test(line[s-2])))
+    return { q: line.slice(s,col), qStart: pos-(col-s) };
+  return null;
+}
+function openDocPicker(dt){
+  const q=dt.q.trim().toLowerCase();
+  const cur=doc();
+  const matches=store.docs
+    .filter(d=> (!cur||d.id!==cur.id) && (!q || (d.name||'').toLowerCase().includes(q)))
+    .slice(0,6);
+  if(!matches.length){ hideAutocomplete(); return; }
+  acKind='doc'; acQueryStart=dt.qStart; acQueryEnd=input.selectionStart; acIndex=0;
+  acItems=matches.map(d=>({label:d.name||'Без названия', insert:(d.name||'Без названия'), docId:d.id}));
+  renderAutocomplete();
+}
 function refreshAutocomplete(){
-  if(acKind==='doc') return;                 // the !doc picker manages itself
   if(!model){ hideAutocomplete(); return; }
+  const dt=docTokenAtCaret();
+  if(dt){ openDocPicker(dt); return; }       // "!name" doc-link picker takes priority
   const reg=nameRegionAtCaret();
   if(!reg){ hideAutocomplete(); return; }
   const {row}=offsetToLineCol(input.selectionStart);
@@ -2870,6 +2925,9 @@ function onStackClick(e){
   const meta = (model && model.meta[row]) ? model.meta[row][col] : null;
   if(meta && meta.type==='link' && meta.url){
     window.open(fullUrl(meta.url), '_blank', 'noopener,noreferrer');
+  }
+  else if(meta && meta.type==='doclink' && meta.docId && store.docs.some(d=>d.id===meta.docId)){
+    switchDoc(meta.docId);   // jump to the linked Calcuta document
   }
 }
 /* mousedown on a variable pill blocks the browser's default caret placement
