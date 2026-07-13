@@ -559,6 +559,13 @@ button{font-family:inherit;color:inherit}
 .authgate-btn:hover{filter:brightness(.95)}
 .authgate-btn:disabled{opacity:.5;cursor:default}
 .authgate-status{margin-top:14px;min-height:16px;font-size:11.5px;color:var(--dim)}
+/* banner shown when viewing a shared "#doc=" link (read-only, no account) */
+.shared-banner{position:fixed;left:0;right:0;bottom:0;z-index:9998;display:flex;align-items:center;gap:12px;
+  padding:10px 16px;background:var(--bg-panel);border-top:1px solid var(--border);box-shadow:0 -6px 20px rgba(0,0,0,.25)}
+.shared-banner .sb-txt{flex:1 1 auto;font-size:13px;color:var(--dim);font-family:var(--font-ui)}
+.shared-banner .sb-btn{flex:0 0 auto;background:var(--accent);color:#fff;border:0;border-radius:7px;
+  padding:8px 14px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--font-ui)}
+.shared-banner .sb-btn:hover{filter:brightness(1.06)}
 #signout-btn{flex:0 0 auto;margin-left:auto;background:none;border:none;cursor:pointer;
   font-size:14px;line-height:1;padding:5px 7px;border-radius:6px;color:var(--dim);opacity:.75}
 #signout-btn:hover{opacity:1;color:var(--text);background:var(--row-hover)}
@@ -583,6 +590,11 @@ button{font-family:inherit;color:inherit}
       <div class="tb-menu-wrap">
         <button class="brand-name" id="brand-btn" type="button" aria-haspopup="true" aria-expanded="false">calcuta</button>
         <div class="tb-menu brand-menu" id="brand-menu" role="menu" hidden>
+          <div class="bm-title">Документ</div>
+          <button class="bm-item" id="exp-word" type="button"><span class="bm-ic">📄</span>Скачать Word</button>
+          <button class="bm-item" id="exp-pdf" type="button"><span class="bm-ic">📕</span>Скачать PDF</button>
+          <button class="bm-item" id="share-link" type="button"><span class="bm-ic">🔗</span>Поделиться ссылкой</button>
+          <div class="bm-sep"></div>
           <div class="bm-title">Тема</div>
           <button class="bm-item" data-theme="dark" role="menuitemradio" type="button"><span class="bm-check">✓</span>Тёмная</button>
           <button class="bm-item" data-theme="light" role="menuitemradio" type="button"><span class="bm-check">✓</span>Светлая</button>
@@ -3757,6 +3769,126 @@ function flushSync(){
 }
 
 /* ================================================================
+   [EXPORT / SHARE]
+   ================================================================ */
+/* Class->color style block reproducing the editor highlighting in a
+   standalone document (pill fills become backgrounds so Word/print show
+   them; box-shadow doesn't render there). */
+function exportStyleBlock(){
+  const cs=getComputedStyle(document.documentElement);
+  const c=n=>cs.getPropertyValue(n).trim();
+  return `
+    :root{color-scheme:light}
+    body{background:#fff;color:#1c1a18;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;margin:0;padding:26px}
+    h2{font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;margin:0 0 14px}
+    table{border-collapse:collapse;width:100%}
+    td{vertical-align:top;padding:2px 0}
+    td.lcell{white-space:pre-wrap;word-break:break-word;padding-right:18px}
+    td.rcell{text-align:right;white-space:nowrap;color:${c('--result')};font-weight:600;width:1%;padding-left:14px;border-left:1px solid #e6e2d8}
+    .num{color:${c('--num')}} .op{color:${c('--op')}} .opx{color:${c('--op-work')};font-weight:600}
+    .date{color:${c('--date')};font-weight:500} .label{color:${c('--label')};font-weight:500}
+    .quote{color:${c('--super')}} .super{color:${c('--super')}} .header{color:${c('--comment')}}
+    .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--dim')}}
+    .varu{background:${c('--pill-hover-bg')};border-radius:5px;padding:0 2px}
+    .super-pill{background:${c('--super-soft')};border-radius:5px;padding:0 3px}
+    .doclink{color:${c('--super')};background:${c('--super-soft')};border-radius:5px;padding:0 2px}
+    .rpill{background:rgba(160,158,150,.22);border-radius:5px;padding:0 3px}
+    .link{color:${c('--link')};text-decoration:underline}
+  `;
+}
+function buildExportHTML(){
+  const title=(doc()&&doc().name)||'Calcuta';
+  let rows='';
+  const kids=highlight.children;
+  for(let k=0;k<kids.length;k++){
+    const left=kids[k].innerHTML || '&nbsp;';
+    const it=model && model.data.lines[k];
+    const res = it ? (it.error ? '⁇' : (it.result!=null ? esc(fmt(it.result)) : '')) : '';
+    rows += '<tr><td class="lcell">'+left+'</td><td class="rcell">'+res+'</td></tr>';
+  }
+  return '<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+exportStyleBlock()+'</style></head>'
+       + '<body><h2>'+esc(title)+'</h2><table>'+rows+'</table></body></html>';
+}
+function safeName(){ return ((doc()&&doc().name)||'calcuta').replace(/[\\/:*?"<>|]+/g,'_').slice(0,60); }
+function downloadBlob(filename, mime, content){
+  const blob=new Blob([content],{type:mime});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function exportWord(){
+  render();   // make sure the overlay matches the current text
+  downloadBlob(safeName()+'.doc', 'application/msword', buildExportHTML());
+  showToast('Скачивается Word');
+}
+function exportPDF(){
+  render();
+  const html=buildExportHTML();
+  const w=window.open('', '_blank');
+  if(!w){ downloadBlob(safeName()+'.html', 'text/html', html); showToast('Разрешите всплывающие окна для PDF'); return; }
+  w.document.write(html);
+  w.document.write('<script>window.onload=function(){setTimeout(function(){window.print();},250);}<\/script>');
+  w.document.close();
+  showToast('Открыт предпросмотр для печати в PDF');
+}
+
+/* ---- share a document via a compressed URL hash (no account needed) ---- */
+async function gzipToB64(str){
+  if(typeof CompressionStream==='undefined') return 'r'+btoa(unescape(encodeURIComponent(str)));  // raw fallback
+  const cs=new CompressionStream('gzip');
+  const w=cs.writable.getWriter(); w.write(new TextEncoder().encode(str)); w.close();
+  const buf=new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  let bin=''; for(const b of buf) bin+=String.fromCharCode(b);
+  return 'g'+btoa(bin);
+}
+async function b64ToText(tag){
+  const kind=tag[0], b64=tag.slice(1);
+  const bin=atob(b64);
+  if(kind==='r') return decodeURIComponent(escape(bin));
+  const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  const ds=new DecompressionStream('gzip');
+  const w=ds.writable.getWriter(); w.write(bytes); w.close();
+  return new Response(ds.readable).text();
+}
+let sharedMode=false;
+/* Open a "#doc=<compressed>" share link as a read-only preview, bypassing the
+   sign-in gate so it can be read without an account. "Сохранить у себя"
+   imports it as a normal document (then the gate applies as usual). */
+async function openSharedView(){
+  const m=location.hash.match(/^#doc=(.+)$/);
+  let data=null;
+  if(m){ try{ data=JSON.parse(await b64ToText(decodeURIComponent(m[1]))); }catch(e){ data=null; } }
+  if(!data || typeof data.t!=='string'){ initAuth(); return; }   // bad link -> normal app
+  sharedMode=true;
+  $('authgate').style.display='none';
+  input.value=data.t; input.readOnly=true;
+  render();
+  const bar=document.createElement('div');
+  bar.className='shared-banner';
+  bar.innerHTML='<span class="sb-txt">Присланный расчёт'+(data.n?' · '+esc(data.n):'')+' — только просмотр</span>'
+    +'<button class="sb-btn" id="sb-import" type="button">Сохранить у себя</button>';
+  document.body.appendChild(bar);
+  $('sb-import').addEventListener('click', ()=>importSharedDoc(data));
+}
+function importSharedDoc(data){
+  const d={ id:uid(), name:data.n||'Присланный документ', text:data.t, lineColors:{}, updated:Date.now() };
+  store.docs.push(d); store.activeId=d.id;
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
+  history.replaceState(null,'',location.pathname);   // drop the #doc= hash
+  location.reload();                                 // reboot into the normal (gated) app
+}
+async function shareLink(){
+  const d=doc(); if(!d) return;
+  const payload=JSON.stringify({n:d.name||'Документ', t:input.value});
+  const enc=await gzipToB64(payload);
+  const base=location.origin+location.pathname;
+  const url=base+'#doc='+encodeURIComponent(enc);
+  copyText(url);
+  showToast(url.length>1900 ? 'Ссылка скопирована (документ большой)' : 'Ссылка скопирована');
+}
+
+/* ================================================================
    [BOOT]
    ================================================================ */
 function boot(){
@@ -3764,7 +3896,8 @@ function boot(){
   computeCharsPerLine();
   buildSwatches();
   load();
-  initAuth();
+  if(location.hash.indexOf('#doc=')===0) openSharedView();   // read-only shared link
+  else initAuth();
 
   input.addEventListener('beforeinput', onBeforeInput);
   input.addEventListener('input', onInput);
@@ -3865,7 +3998,11 @@ function boot(){
   $('doc-find-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('docfind-menu'); });
   // theme choice inside the calcuta menu (menu stays open for further tweaks)
   $('brand-menu').addEventListener('click', e=>{
-    const it=e.target.closest('.bm-item'); if(it) setTheme(it.dataset.theme);
+    const it=e.target.closest('.bm-item'); if(!it) return;
+    if(it.id==='exp-word'){ exportWord(); closeMenus(); return; }
+    if(it.id==='exp-pdf'){ exportPDF(); closeMenus(); return; }
+    if(it.id==='share-link'){ shareLink(); closeMenus(); return; }
+    if(it.dataset.theme) setTheme(it.dataset.theme);
   });
   // pinned document tabs
   $('tab-tasks').addEventListener('click', ()=>switchDoc(TASKS_ID));
