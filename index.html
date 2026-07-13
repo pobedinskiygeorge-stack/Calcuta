@@ -310,6 +310,17 @@ button{font-family:inherit;color:inherit}
 #sync-status.sync-offline{color:var(--accent);animation:none}
 #sync-status.sync-offline .sync-badge-off{opacity:1;color:var(--accent)}
 @keyframes sync-pulse{0%,100%{opacity:.5}50%{opacity:1}}
+/* caret-anchored autocomplete / doc-link popup */
+#acbox{position:fixed;z-index:60;min-width:150px;max-width:280px;max-height:210px;overflow-y:auto;
+  background:var(--bg-panel);border:1px solid var(--border);border-radius:9px;padding:4px;
+  box-shadow:0 10px 30px rgba(0,0,0,.38);font-family:var(--font-ui)}
+#acbox[hidden]{display:none}
+.ac-item{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:6px;cursor:pointer;
+  font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ac-item .ac-ic{flex:0 0 auto;width:14px;color:var(--dim);font-size:12px}
+.ac-item.sel{background:var(--bg-editor)}
+.ac-item .ac-val{margin-left:auto;color:var(--dim);font-size:11.5px;font-variant-numeric:tabular-nums}
+.ac-empty{padding:6px 9px;font-size:12px;color:var(--dim)}
 
 /* editor grid — single vertical scroller; children grow to content height so
    the textarea and the highlight overlay scroll together (no caret desync) */
@@ -685,6 +696,7 @@ button{font-family:inherit;color:inherit}
   </div>
 </div>
 
+<div id="acbox" hidden></div>
 <div id="ctxmenu">
   <p class="ctx-title">Цвет строк</p>
   <div class="swatches" id="ctx-swatches"></div>
@@ -2335,6 +2347,7 @@ function onChange(){
   // edit always wins the per-doc merge.
   const d=doc(); if(d){ d.text=input.value; d.updated=Date.now(); }
   render(); scheduleSave();
+  refreshAutocomplete();
 }
 
 /* Replace the whole document, keeping indent, mask and caret consistent. */
@@ -2498,7 +2511,100 @@ function prevCharStart(s, pos, floor){
   if(i>floor) i--;
   return i;
 }
+/* ---------- variable autocomplete (shares #acbox with the !doc picker) ---------- */
+let acItems=[], acIndex=-1, acQueryStart=-1, acQueryEnd=-1, acKind=null;
+function acOpen(){ return !$('acbox').hidden; }
+function hideAutocomplete(){
+  const box=$('acbox'); if(box.hidden && !acKind) return;
+  box.hidden=true; box.innerHTML=''; acItems=[]; acIndex=-1; acKind=null;
+}
+/* The name-ish region typed right before the caret: {raw, base} or null.
+   base = offset where raw begins. Skips comments and assignment LHS. */
+function nameRegionAtCaret(){
+  if(input.selectionStart!==input.selectionEnd) return null;
+  const pos=input.selectionStart;
+  const {row,col}=offsetToLineCol(pos);
+  const line=input.value.split('\n')[row];
+  const cs=lineCommentStart(line); if(cs>=0 && col>cs) return null;
+  const am=ASSIGN_RE.exec(line);
+  if(am){ const eq=line.indexOf('='); if(eq>=0 && col<=eq) return null; }   // naming a var
+  let s=col;
+  while(s>0 && /[\p{L}\d_ ]/u.test(line[s-1])) s--;
+  const raw=line.slice(s,col);
+  return { raw, base: pos-(col-s) };
+}
+function refreshAutocomplete(){
+  if(acKind==='doc') return;                 // the !doc picker manages itself
+  if(!model){ hideAutocomplete(); return; }
+  const reg=nameRegionAtCaret();
+  if(!reg){ hideAutocomplete(); return; }
+  const {row}=offsetToLineCol(input.selectionStart);
+  const item=model.data.lines[row]; if(!item){ hideAutocomplete(); return; }
+  const names=model.data.varsBySection[item.section];
+  const scope=model.data.scopesBySection[item.section];
+  if(!names || !names.size){ hideAutocomplete(); return; }
+  // try the longest word-suffix of the captured region that has matches, so
+  // "аренда 5 от да" still finds "от дани входные"
+  const starts=[0];
+  for(let k=1;k<reg.raw.length;k++) if(reg.raw[k-1]===' ' && reg.raw[k]!==' ') starts.push(k);
+  for(const st of starts){
+    const q=reg.raw.slice(st).toLowerCase();
+    if(q.length<2 || /^[\d ]/.test(q)) continue;
+    const matches=[...names]
+      .filter(n=> scope[n]!==undefined && n.startsWith(q) && n.length>q.length)
+      .sort((a,b)=> a.length-b.length || (a<b?-1:1)).slice(0,6);
+    if(matches.length){
+      acKind='var'; acQueryStart=reg.base+st; acQueryEnd=input.selectionStart; acIndex=0;
+      acItems=matches.map(n=>({label:n, insert:n, value:scope[n]}));
+      renderAutocomplete(); return;
+    }
+  }
+  hideAutocomplete();
+}
+function renderAutocomplete(){
+  const box=$('acbox');
+  box.innerHTML=acItems.map((it,i)=>{
+    const val = (acKind==='var' && it.value!=null) ? '<span class="ac-val">'+esc(fmt(it.value))+'</span>' : '';
+    const ic = acKind==='doc' ? '→' : '=';
+    return '<div class="ac-item'+(i===acIndex?' sel':'')+'" data-i="'+i+'"><span class="ac-ic">'+ic+'</span>'
+      +'<span class="ac-lbl">'+esc(it.label)+'</span>'+val+'</div>';
+  }).join('');
+  box.hidden=false;
+  positionAcBox();
+}
+function positionAcBox(){
+  const box=$('acbox');
+  const {row,col}=offsetToLineCol(acQueryEnd);
+  const rects=charRangeRects(row, Math.max(0,col-1), col);
+  let x, y;
+  if(rects.length){ const r=rects[rects.length-1]; x=r.left; y=r.top+r.height; }
+  else { const el=highlight.children[row]; const r=el?el.getBoundingClientRect():stack.getBoundingClientRect(); x=r.left; y=r.top+LH; }
+  box.style.left='0px'; box.style.top='0px';                 // measure at origin first
+  const bw=box.offsetWidth, bh=box.offsetHeight;
+  x=Math.min(x, window.innerWidth-bw-8);
+  if(y+bh>window.innerHeight-8) y=Math.max(8, y-bh-LH);      // flip above if no room below
+  box.style.left=Math.max(8,x)+'px'; box.style.top=y+'px';
+}
+function acceptAutocomplete(){
+  const it=acItems[acIndex]; if(!it) return false;
+  const kind=acKind, qs=acQueryStart, qe=acQueryEnd;
+  const v=input.value;
+  const ins=it.insert;
+  const nt=v.slice(0,qs)+ins+v.slice(qe);
+  hideAutocomplete();
+  commitValue(nt, qs+ins.length);
+  return true;
+}
+function acKeydown(e){
+  if(!acOpen()) return false;
+  if(e.key==='ArrowDown'){ e.preventDefault(); acIndex=(acIndex+1)%acItems.length; renderAutocomplete(); return true; }
+  if(e.key==='ArrowUp'){ e.preventDefault(); acIndex=(acIndex-1+acItems.length)%acItems.length; renderAutocomplete(); return true; }
+  if(e.key==='Enter'||e.key==='Tab'){ e.preventDefault(); acceptAutocomplete(); return true; }
+  if(e.key==='Escape'){ e.preventDefault(); hideAutocomplete(); return true; }
+  return false;
+}
 function onEditorKeydown(e){
+  if(acKeydown(e)) return;
   const mod=e.ctrlKey||e.metaKey;
   // undo / redo
   if(mod && (e.key==='z'||e.key==='Z' || e.key==='я'||e.key==='Я')){
@@ -3607,9 +3713,15 @@ function boot(){
   input.addEventListener('compositionstart', ()=>composing=true);
   input.addEventListener('compositionend', ()=>{ composing=false; onInput(); });
   input.addEventListener('keydown', onEditorKeydown);
-  input.addEventListener('keyup', e=>{ if(e.key.startsWith('Arrow')||e.key==='Home'||e.key==='End'||e.key.startsWith('Page')) snapCaret(); });
-  input.addEventListener('mouseup', ()=>setTimeout(snapCaret,0));
-  input.addEventListener('blur', canonicalizeNumbers);
+  input.addEventListener('keyup', e=>{
+    if(acOpen() && (e.key==='ArrowUp'||e.key==='ArrowDown')) return;   // popup is navigating, keep it open
+    if(e.key.startsWith('Arrow')||e.key==='Home'||e.key==='End'||e.key.startsWith('Page')){ snapCaret(); hideAutocomplete(); }
+  });
+  input.addEventListener('mouseup', ()=>{ setTimeout(snapCaret,0); hideAutocomplete(); });
+  input.addEventListener('blur', ()=>{ canonicalizeNumbers(); hideAutocomplete(); });
+  input.addEventListener('scroll', hideAutocomplete);
+  // accept a suggestion by tapping it (preventDefault keeps textarea focus)
+  $('acbox').addEventListener('mousedown', e=>{ e.preventDefault(); const it=e.target.closest('.ac-item'); if(it){ acIndex=+it.dataset.i; acceptAutocomplete(); } });
   input.addEventListener('copy', stripOnCopy);
   input.addEventListener('cut', stripOnCopy);
   input.addEventListener('paste', onPaste);
