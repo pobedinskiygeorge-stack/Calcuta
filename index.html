@@ -351,7 +351,7 @@ button{font-family:inherit;color:inherit}
 /* Selection must read even on a line that carries its own color: the tint
    is an inline background, so selection paints ABOVE it via box-shadow
    (accent bar + wash) - a different property that inline styles can't win. */
-.gutter-line.selected{box-shadow:inset 2px 0 0 var(--accent), inset 0 0 0 999px var(--accent-soft)}
+.gutter-line.selected{border-radius:7px;box-shadow:inset 2px 0 0 var(--accent), inset 0 0 0 999px var(--accent-soft)}
 /* While TEXT is selected in the editor, the spanned lines' numbers light up:
    number glyphs only - the gutter cell, the selected text band and the
    results column stay exactly as they are. !important beats an assigned
@@ -379,7 +379,11 @@ button{font-family:inherit;color:inherit}
 /* min-height (not height): a line that doesn't fit the available width wraps
    instead of being clipped; JS keeps the gutter/results rows the same height
    as their matching (possibly wrapped) highlight row, see render(). */
-.hl-line{min-height:var(--lh);width:100%}
+/* border-radius so every row-level background on a line — hover-source (clay),
+   done/checked tint, and the /tag & /date spotlight + line-colour washes
+   (inset box-shadows) — renders with soft rounded corners, never a hard
+   rectangle. Radius clips the inset box-shadows too. */
+.hl-line{min-height:var(--lh);width:100%;border-radius:9px}
 .hl-line.src{background:var(--row-src)}
 .hl-line.checked{background:var(--checked-bg)}
 #highlight .num{color:var(--num)}
@@ -407,12 +411,14 @@ button{font-family:inherit;color:inherit}
    untouched (the outline extends over the spaces around the number). */
 /* Inline result pill: soft gray fill via box-shadow spread (no layout width
    change, no overhang) so operators keep their normal gap from the number. */
-/* Inline result pill: horizontal padding gives the same breathing room as the
-   results-column pill; the equal negative margin cancels the added layout
-   width so monospace alignment and the caret stay untouched (the fill just
-   overhangs the spaces around the number). */
+/* Inline result pill: horizontal padding gives breathing room around the
+   number; the equal negative margin cancels the added layout width so
+   monospace alignment and the caret stay untouched. The overhang is kept
+   smaller than the operator-padding space, so an adjacent math operator keeps
+   a visible gap from the pill edge (like every other token) instead of
+   touching it. */
 #highlight .rpill{color:var(--text-strong);border-radius:7px;
-  background:rgba(160,158,150,.22);padding:0 7px;margin:0 -7px}
+  background:rgba(160,158,150,.22);padding:0 4px;margin:0 -4px}
 /* Link pill: soft blue fill + underline; opens on click via the #stack
    handler (this overlay is pointer-events:none, so the click passes through). */
 #highlight .link{color:var(--link);text-decoration:underline;text-underline-offset:2px;
@@ -3801,12 +3807,26 @@ function exportWord(){
 function exportPDF(){
   render();
   const html=buildExportHTML();
-  const w=window.open('', '_blank');
-  if(!w){ downloadBlob(safeName()+'.html', 'text/html', html); showToast('Разрешите всплывающие окна для PDF'); return; }
-  w.document.write(html);
-  w.document.write('<script>window.onload=function(){setTimeout(function(){window.print();},250);}<\/script>');
-  w.document.close();
-  showToast('Открыт предпросмотр для печати в PDF');
+  // Print from a hidden same-origin iframe INSIDE the app — never open a
+  // separate window/tab (on mobile that tab can replace the app with no way
+  // back). The iframe is removed after printing, so the app is never left.
+  const frame=document.createElement('iframe');
+  frame.setAttribute('aria-hidden','true');
+  frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0';
+  frame.srcdoc=html;
+  let cleaned=false;
+  const cleanup=()=>{ if(cleaned) return; cleaned=true; setTimeout(()=>{ if(frame.parentNode) frame.remove(); }, 800); };
+  frame.onload=()=>{
+    try{
+      const w=frame.contentWindow;
+      w.onafterprint=cleanup;
+      w.focus();
+      w.print();
+    }catch(e){ cleanup(); }
+    setTimeout(cleanup, 120000);   // safety net if onafterprint never fires
+  };
+  document.body.appendChild(frame);
+  showToast('Печать в PDF');
 }
 
 /* ---- share a document via a compressed URL hash (no account needed) ---- */
