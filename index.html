@@ -49,8 +49,8 @@
   --checked-text:#79856f;
   --row-hover:rgba(255,255,255,.035);
   --row-src:rgba(201,100,66,.14);
-  --sel:rgba(255,140,45,.5);
-  --sel-text:#2a1400;      /* forced text color under selection (any syntax color stays readable) */
+  --sel:rgba(255,150,70,.30);   /* translucent enough to read the text through it */
+  --sel-text:#ffefe0;      /* forced text color under selection (any syntax color stays readable) */
   --link:#6fb2f0;          /* URL pill */
   --scroll-thumb:#3a3630;
 
@@ -95,7 +95,7 @@
   --checked-text:#9a9488;
   --row-hover:rgba(0,0,0,.045);
   --row-src:rgba(201,100,66,.12);
-  --sel:rgba(230,120,30,.42);
+  --sel:rgba(235,140,45,.26);   /* translucent enough to read the text through it */
   --sel-text:#2a1400;
   --link:#2b7fc4;
   --scroll-thumb:#cfc9bd;
@@ -242,10 +242,16 @@ button{font-family:inherit;color:inherit}
   flex:1 1 auto;min-width:0;font-size:13px;font-family:var(--font-mono);color:var(--text);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.doc-item .doc-name-input{
+/* Standalone class (NOT scoped to .doc-item): the rename box is also injected
+   into a top-bar pinned tab, which is not inside a .doc-item — a descendant
+   selector left it unstyled there, so it fell back to browser defaults and the
+   typed text was invisible. -webkit-text-fill-color is pinned too so it can never
+   inherit the transparent fill used by the main editor textarea. */
+.doc-name-input{
   flex:1 1 auto;min-width:0;font-size:13px;font-family:var(--font-mono);
   background:var(--bg-panel);border:1px solid var(--accent);border-radius:5px;
-  color:var(--text-strong);padding:2px 6px;outline:none;
+  color:var(--text-strong);-webkit-text-fill-color:var(--text-strong);
+  caret-color:var(--accent);padding:2px 6px;outline:none;
 }
 .doc-item .doc-badge{
   flex:0 0 auto;font-size:10.5px;background:var(--date);color:#22200f;border-radius:9px;
@@ -560,7 +566,7 @@ button{font-family:inherit;color:inherit}
      the tag-name box, inline document rename, and the Ctrl+F find field). */
   .docfind-menu input,
   .tag-form input[type=text],
-  .doc-item .doc-name-input,
+  .doc-name-input,
   #findbar input{font-size:16px}
 }
 
@@ -1802,7 +1808,11 @@ function render(){
   const activeTags=activeSpotlightTags(textCode, store.tags);
   const activeDates=activeSpotlightDates(textCode);
   const lineCols=doc().lineColors;
-  let hl='';
+  // First pass: build each line's HTML and its tint list. We collect the tint
+  // "signature" per line so a second pass can merge vertically-adjacent rows
+  // that share the exact same tint into one continuous rounded block (no concave
+  // notch between two same-colored lines).
+  const builtRows=new Array(n), tintRows=new Array(n), sigRows=new Array(n);
   for(let k=0;k<n;k++){
     const lineSec=A.lines[k].section;
     const built=buildLineHTML(A.lines[k], A.varsBySection[lineSec]||EMPTY_VARS, A.varDefLineBySection[lineSec]||EMPTY_OBJ, store.tags, activeTags, activeDates);
@@ -1814,8 +1824,23 @@ function render(){
     // color itself stays on the line number, the text just gets a light tint
     const lcol=lineCols[k];
     if(lcol) tints.push('inset 0 0 0 999px '+hexToRgba(lcol, LINE_TINT_ALPHA));
-    const spotStyle=tints.length? ' style="box-shadow:'+tints.join(',')+'"' : '';
-    hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'"'+spotStyle+'>'+built.html+'</div>';
+    builtRows[k]=built; tintRows[k]=tints; sigRows[k]=tints.join('|');
+  }
+  let hl='';
+  for(let k=0;k<n;k++){
+    const built=builtRows[k], tints=tintRows[k], sig=sigRows[k];
+    const styles=[];
+    if(tints.length) styles.push('box-shadow:'+tints.join(','));
+    if(sig){
+      // round only the OUTER corners of a run of identically-tinted rows: an
+      // interior edge shared with a same-color neighbour gets a square (0) corner
+      // so the two rows fuse seamlessly instead of pinching inward.
+      const top = (k>0 && sigRows[k-1]===sig) ? '0' : '9px';
+      const bot = (k<n-1 && sigRows[k+1]===sig) ? '0' : '9px';
+      if(top!=='9px' || bot!=='9px') styles.push('border-radius:'+top+' '+top+' '+bot+' '+bot);
+    }
+    const style=styles.length? ' style="'+styles.join(';')+'"' : '';
+    hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'"'+style+'>'+built.html+'</div>';
   }
   highlight.innerHTML=hl;
 
@@ -2434,7 +2459,11 @@ function onChange(){
   // gap between a keystroke and its save would merge against old text and
   // could drop the just-typed edit. `updated` moves forward too, so the local
   // edit always wins the per-doc merge.
-  const d=doc(); if(d){ d.text=input.value; d.updated=stamp(); }
+  const d=doc();
+  if(d){
+    if(d.text!==input.value) d.lineColors=remapLineColors(d.text, input.value, d.lineColors);
+    d.text=input.value; d.updated=stamp();
+  }
   render(); scheduleSave();
   refreshAutocomplete();
 }
@@ -2779,6 +2808,34 @@ function restoreHistory(st){
 function doUndo(){ if(!undoStack.length) return; redoStack.push(histState()); restoreHistory(undoStack.pop()); }
 function doRedo(){ if(!redoStack.length) return; undoStack.push(histState()); restoreHistory(redoStack.pop()); }
 
+/* Line colors are bound to a line's TEXT, not its number. On every edit we remap
+   the color map from old line indices to new ones by matching the unchanged head
+   and tail of the document around the edit: a color rides along when lines are
+   inserted or removed above it, and it is dropped when its own line is deleted or
+   its text is fully erased. Called from onChange so ALL text changes (typing,
+   Enter, backspace-join, programmatic edits) get consistent behavior. */
+function remapLineColors(oldText, newText, lc){
+  if(!lc || !Object.keys(lc).length) return lc||{};
+  const o=oldText.split('\n'), nw=newText.split('\n');
+  const oLen=o.length, nLen=nw.length;
+  let p=0; while(p<oLen && p<nLen && o[p]===nw[p]) p++;                 // common leading lines
+  let s=0; while(s<oLen-p && s<nLen-p && o[oLen-1-s]===nw[nLen-1-s]) s++; // common trailing lines
+  const midNew=nLen-s-p;              // new lines occupying the changed region
+  const delta=nLen-oLen;
+  const out={};
+  Object.keys(lc).forEach(k=>{
+    const i=+k, color=lc[k];
+    let ni;
+    if(i<p) ni=i;                                      // before the edit: index unchanged
+    else if(i>=oLen-s) ni=i+delta;                     // after the edit: shifted by line delta
+    else { const j=i-p; if(j>=midNew) return; ni=p+j; } // inside the edit: positional; removed lines drop
+    if(ni<0 || ni>=nLen) return;
+    if(!(nw[ni]||'').trim()) return;                   // a fully-erased (blank) line loses its color
+    out[ni]=color;
+  });
+  return out;
+}
+
 /* ---------- delete a line (right-click menu / swipe) ---------- */
 function deleteLine(i){
   const lines=input.value.split('\n');
@@ -2786,12 +2843,7 @@ function deleteLine(i){
   const before=lines.slice(0,i).join('\n');
   lines.splice(i,1);
   const newText=lines.join('\n');
-  // shift stored line-number colors down past the removed line
-  const lc=doc().lineColors, shifted={};
-  Object.keys(lc).forEach(k=>{
-    k=+k; if(k<i) shifted[k]=lc[k]; else if(k>i) shifted[k-1]=lc[k];
-  });
-  doc().lineColors=shifted;
+  // color remap is handled generically in onChange (bound to text, not number)
   selectedGutter.clear();
   const caret=Math.min(before.length, newText.length);
   commitValue(newText, i===0?0:caret);
