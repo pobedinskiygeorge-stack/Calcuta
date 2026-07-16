@@ -185,7 +185,10 @@ button{font-family:inherit;color:inherit}
 /* one control row: loupe smoothly unfolds the search box, "+" creates */
 .docfind-bar{display:flex;align-items:center;gap:6px;margin-bottom:6px}
 .docfind-bar .icon-btn{border:1px solid var(--border)}
-.docfind-menu input{
+/* the collapsible search field ONLY — scoped by id so it never hits the inline
+   rename box that also lives inside .docfind-menu (that box was inheriting
+   width:0;opacity:0 here and rendering invisibly) */
+#docfind-input{
   width:0;opacity:0;padding:7px 0;border:1px solid transparent;
   flex:0 1 auto;min-width:0;background:var(--bg-editor);border-radius:7px;
   color:var(--text);font-size:13px;outline:none;
@@ -449,12 +452,20 @@ button{font-family:inherit;color:inherit}
   background:transparent;color:transparent;caret-color:var(--accent);
   outline:none;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;
 }
-#input::selection{background:var(--sel);color:var(--sel-text)}
+/* The native selection is made invisible in the editor: a custom rounded
+   overlay (#sellayer) draws the selection instead, so it can have oval corners
+   like the line-number colour wash (native ::selection can't be rounded). The
+   text itself is never obscured — the tint sits BEHIND #highlight's glyphs. */
+#input::selection{background:transparent;color:transparent}
 
 /* search highlight layer (yellow behind text) */
 #searchlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
 .search-mark{position:absolute;height:var(--lh);background:rgba(227,183,85,.30);border-radius:3px}
 .search-mark.active{background:rgba(227,183,85,.62);box-shadow:0 0 0 1px rgba(227,183,85,.85)}
+
+/* custom rounded text-selection overlay (behind the highlighted text) */
+#sellayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
+.sel-rect{position:absolute;height:var(--lh);background:var(--sel);border-radius:7px}
 
 /* oval pill background behind a variable, shown ONLY while hovering it —
    sits behind #highlight's text (lower in the DOM, same z-index) so the
@@ -564,7 +575,7 @@ button{font-family:inherit;color:inherit}
   /* Every focusable text field must be ≥16px on iOS, otherwise Safari
      auto-zooms the whole page when the field gains focus (the loupe search,
      the tag-name box, inline document rename, and the Ctrl+F find field). */
-  .docfind-menu input,
+  #docfind-input,
   .tag-form input[type=text],
   .doc-name-input,
   #findbar input{font-size:16px}
@@ -728,6 +739,7 @@ button{font-family:inherit;color:inherit}
       <div id="gutter"></div>
       <div id="stack">
         <div id="searchlayer"></div>
+        <div id="sellayer"></div>
         <div id="pillhover"></div>
         <pre id="highlight" class="layer" aria-hidden="true"></pre>
         <textarea id="input" class="layer" spellcheck="false" autocomplete="off"
@@ -1632,7 +1644,7 @@ const input=$('input'), highlight=$('highlight'),
       gutter=$('gutter'), results=$('results'), hotspots=$('hotspots'),
       stack=$('stack'), editor=$('editor'), ctxmenu=$('ctxmenu'),
       linemenu=$('linemenu'), docmenu=$('docmenu'), toast=$('toast'),
-      searchlayer=$('searchlayer'), pillhover=$('pillhover');
+      searchlayer=$('searchlayer'), sellayer=$('sellayer'), pillhover=$('pillhover');
 
 const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text, name and
@@ -1902,6 +1914,7 @@ function render(){
 
   syncScroll();
   if(searchQuery){ computeMatches(); renderSearch(); }
+  renderSelection();   // re-place the rounded selection overlay after layout
 }
 
 /* ---------- persistence ---------- */
@@ -2269,6 +2282,71 @@ function renderSearch(){
   // counter (Ctrl+F find bar)
   const label = !searchQuery ? '' : (searchMatches.length===0 ? 'нет совпадений' : (searchIdx+1)+' / '+searchMatches.length);
   $('find-count').textContent = label;
+}
+
+/* Draw the current text selection as rounded rectangles behind the text, so the
+   selection looks oval like the line-number colour wash instead of the square
+   native highlight (which we've made transparent). One rounded rect per visual
+   row; a run of vertically-adjacent full-width rows fuses (square inner edges)
+   into a single block so there's no concave notch between them. */
+function renderSelection(){
+  if(!sellayer) return;
+  const s=input.selectionStart, e=input.selectionEnd;
+  if(document.activeElement!==input || s==null || e==null || s===e){ sellayer.innerHTML=''; return; }
+  const v=input.value, lines=v.split('\n');
+  const starts=[]; let off=0;
+  for(let i=0;i<lines.length;i++){ starts.push(off); off+=lines[i].length+1; }
+  const locate=pos=>{ let line=0; while(line+1<starts.length && starts[line+1]<=pos) line++; return {line, col:pos-starts[line]}; };
+  const a=locate(s), b=locate(e);
+  const sb=stack.getBoundingClientRect();
+  const sample=highlight.children[a.line]||highlight.children[0];
+  if(!sample){ sellayer.innerHTML=''; return; }
+  const sr=sample.getBoundingClientRect();
+  const contentLeft=sr.left-sb.left+stack.scrollLeft;      // where text starts
+  const contentRight=sr.right-sb.left+stack.scrollLeft;    // full text-column width
+
+  // 1) collect the selection's client rects and COALESCE per visual row (one span
+  //    from min-left to max-right) so a selection crossing a coloured token
+  //    boundary doesn't split into two pills with a seam between them.
+  const rowsMap=new Map();
+  const addFrag=(top,left,right,height)=>{
+    const key=Math.round(top), ex=rowsMap.get(key);
+    if(ex){ ex.left=Math.min(ex.left,left); ex.right=Math.max(ex.right,right); }
+    else rowsMap.set(key,{top, left, right, height});
+  };
+  for(let line=a.line; line<=b.line; line++){
+    const cs=(line===a.line)?a.col:0;
+    const ce=(line===b.line)?b.col:lines[line].length;
+    let rects=charRangeRects(line, cs, ce);
+    if(!rects.length){                                     // empty line inside the selection
+      const el=highlight.children[line];
+      if(el){ const er=el.getBoundingClientRect(); rects=[{left:er.left, top:er.top, width:0, height:LH}]; }
+    }
+    for(const r of rects){
+      const top=r.top-sb.top+stack.scrollTop, left=r.left-sb.left+stack.scrollLeft;
+      addFrag(top, left, left+r.width, r.height);
+    }
+  }
+  const rows=[...rowsMap.values()].sort((x,y)=>x.top-y.top);
+  // 2) every row except the LAST fills to the right edge (its line-break is
+  //    selected); every row below the FIRST starts at the left edge — so whole
+  //    interior lines become identical full-width bars, like the number-colour wash.
+  for(let i=0;i<rows.length;i++){
+    if(i<rows.length-1) rows[i].right=contentRight;
+    if(i>0) rows[i].left=contentLeft;
+  }
+  // 3) emit; a run of identical (full-width) rows fuses via square inner corners
+  const geomSame=(x,y)=> x&&y && Math.abs(x.left-y.left)<=1 && Math.abs(x.right-y.right)<=1;
+  let html='';
+  for(let i=0;i<rows.length;i++){
+    const it=rows[i], prev=rows[i-1], next=rows[i+1];
+    const top=(geomSame(it,prev) && Math.abs(prev.top+prev.height-it.top)<=1)?'0':'7px';
+    const bot=(geomSame(it,next) && Math.abs(it.top+it.height-next.top)<=1)?'0':'7px';
+    const br=(top==='7px'&&bot==='7px')?'':';border-radius:'+top+' '+top+' '+bot+' '+bot;
+    html+='<div class="sel-rect" style="top:'+Math.round(it.top)+'px;left:'+Math.round(it.left)
+      +'px;width:'+Math.max(2,Math.round(it.right-it.left))+'px;height:'+Math.round(it.height)+'px'+br+'"></div>';
+  }
+  sellayer.innerHTML=html;
 }
 
 /* Single source of truth for the in-document (Ctrl+F) query. */
@@ -4003,7 +4081,9 @@ function boot(){
   input.addEventListener('scroll', syncScroll);
 
   document.addEventListener('selectionchange', selectionGutterSync);
+  document.addEventListener('selectionchange', renderSelection);   // rounded selection overlay
   input.addEventListener('blur', ()=>setTimeout(selectionGutterSync,0));
+  input.addEventListener('blur', ()=>{ if(sellayer) sellayer.innerHTML=''; });   // drop the overlay when focus leaves
   stack.addEventListener('mousemove', onStackMove);
   stack.addEventListener('mouseleave', onStackLeave);
   stack.addEventListener('contextmenu', onStackCtx);
