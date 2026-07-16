@@ -2305,15 +2305,13 @@ function renderSelection(){
   const contentLeft=sr.left-sb.left+stack.scrollLeft;      // where text starts
   const contentRight=sr.right-sb.left+stack.scrollLeft;    // full text-column width
 
-  // 1) collect the selection's client rects and COALESCE per visual row (one span
-  //    from min-left to max-right) so a selection crossing a coloured token
-  //    boundary doesn't split into two pills with a seam between them.
-  const rowsMap=new Map();
-  const addFrag=(top,left,right,height)=>{
-    const key=Math.round(top), ex=rowsMap.get(key);
-    if(ex){ ex.left=Math.min(ex.left,left); ex.right=Math.max(ex.right,right); }
-    else rowsMap.set(key,{top, left, right, height});
-  };
+  // Collect the selection as spans per VISUAL row. For each logical line,
+  // charRangeRects gives one rect per wrapped sub-row: the sub-rows that AREN'T
+  // the line's last are soft-wrap continuations (text flows edge-to-edge there)
+  // and fill to the right edge, while the LAST sub-row of every logical line hugs
+  // its real content — so a hard line-break's empty tail is never painted as a
+  // full-width strip. Fragments on one row (split by a coloured token) are merged.
+  const rows=[];
   for(let line=a.line; line<=b.line; line++){
     const cs=(line===a.line)?a.col:0;
     const ce=(line===b.line)?b.col:lines[line].length;
@@ -2322,37 +2320,42 @@ function renderSelection(){
       const el=highlight.children[line];
       if(el){ const er=el.getBoundingClientRect(); rects=[{left:er.left, top:er.top, width:0, height:LH}]; }
     }
+    const m=new Map();
     for(const r of rects){
       const top=r.top-sb.top+stack.scrollTop, left=r.left-sb.left+stack.scrollLeft;
-      addFrag(top, left, left+r.width, r.height);
+      const key=Math.round(top), ex=m.get(key);
+      if(ex){ ex.left=Math.min(ex.left,left); ex.right=Math.max(ex.right,left+r.width); }
+      else m.set(key,{top, left, right:left+r.width, height:r.height});
     }
+    const tops=[...m.keys()].sort((x,y)=>x-y);
+    tops.forEach((t,idx)=>{
+      const span=m.get(t);
+      if(idx<tops.length-1) span.right=contentRight;   // soft-wrap continuation → fill to the edge
+      rows.push(span);
+    });
   }
-  const rows=[...rowsMap.values()].sort((x,y)=>x.top-y.top);
-  // In a multi-row selection whose first line begins with a marker/indent
-  // (checkbox, //, #, leading spaces), the first row's text starts AFTER that
-  // prefix, so without this it sat inset while the full rows below reached the
-  // left edge — a ragged left step. If the selection starts at/within that
-  // prefix, pull the first row out to the left edge too so the block is flush.
+  // Flush the very first row's left past a leading marker/indent (checkbox, //,
+  // #, spaces) so a block that starts on such a line isn't stepped in on the left.
   const firstCls=classify(lines[a.line]);
   const firstLead=firstCls.markerLen || (lines[a.line].match(/^\s*/)[0].length);
-  // 2) every row except the LAST fills to the right edge (its line-break is
-  //    selected); every row below the FIRST starts at the left edge — so whole
-  //    interior lines become identical full-width bars, like the number-colour wash.
-  for(let i=0;i<rows.length;i++){
-    if(i<rows.length-1) rows[i].right=contentRight;
-    if(i>0) rows[i].left=contentLeft;
-  }
-  if(rows.length>1 && a.col<=firstLead) rows[0].left=contentLeft;   // flush the first row's left
-  // 3) emit; a run of identical (full-width) rows fuses via square inner corners
-  const geomSame=(x,y)=> x&&y && Math.abs(x.left-y.left)<=1 && Math.abs(x.right-y.right)<=1;
+  if(rows.length>1 && a.col<=firstLead) rows[0].left=contentLeft;
+
+  // Per-CORNER rounding: a corner is square when the vertically-adjacent row
+  // shares that same edge, so consecutive rows join with no concave notch — only
+  // the true outer corners of the selection outline are rounded.
+  const eq=(x,y)=>Math.abs(x-y)<=1;
   let html='';
   for(let i=0;i<rows.length;i++){
     const it=rows[i], prev=rows[i-1], next=rows[i+1];
-    const top=(geomSame(it,prev) && Math.abs(prev.top+prev.height-it.top)<=1)?'0':'7px';
-    const bot=(geomSame(it,next) && Math.abs(it.top+it.height-next.top)<=1)?'0':'7px';
-    const br=(top==='7px'&&bot==='7px')?'':';border-radius:'+top+' '+top+' '+bot+' '+bot;
+    const up  = prev && Math.abs(prev.top+prev.height-it.top)<=1;
+    const down= next && Math.abs(it.top+it.height-next.top)<=1;
+    const tl=(up   && eq(prev.left, it.left))  ?0:7;
+    const tr=(up   && eq(prev.right,it.right)) ?0:7;
+    const br=(down && eq(next.right,it.right)) ?0:7;
+    const bl=(down && eq(next.left, it.left))  ?0:7;
     html+='<div class="sel-rect" style="top:'+Math.round(it.top)+'px;left:'+Math.round(it.left)
-      +'px;width:'+Math.max(2,Math.round(it.right-it.left))+'px;height:'+Math.round(it.height)+'px'+br+'"></div>';
+      +'px;width:'+Math.max(2,Math.round(it.right-it.left))+'px;height:'+Math.round(it.height)
+      +'px;border-radius:'+tl+'px '+tr+'px '+br+'px '+bl+'px"></div>';
   }
   sellayer.innerHTML=html;
 }
