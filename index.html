@@ -2144,6 +2144,30 @@ function beginRename(id, nameEl){
   inp.addEventListener('click', e=>e.stopPropagation());
   inp.addEventListener('dblclick', e=>e.stopPropagation());
 }
+/* Rename the ACTIVE unpinned doc right on its top-bar pill (#doc-find-btn).
+   The button isn't replaced (renderDocs updates it by id and would lose it) —
+   the input is inserted beside it and the button is hidden, then restored. */
+function beginRenamePill(id){
+  const d=store.docs.find(x=>x.id===id);
+  if(!d || d.protected) return;
+  const fb=$('doc-find-btn'); if(!fb) return;
+  const inp=document.createElement('input');
+  inp.className='doc-name-input'; inp.value=d.name||''; inp.maxLength=60; inp.spellcheck=false;
+  fb.style.display='none';
+  fb.parentNode.insertBefore(inp, fb);
+  inp.focus(); inp.select();
+  let done=false;
+  const restore=()=>{ if(inp.parentNode) inp.remove(); fb.style.display=''; };
+  const commit=()=>{ if(done) return; done=true; d.name=(inp.value.trim()||'Без названия'); d.updated=stamp(); restore(); renderDocs(); scheduleSave(); };
+  const cancel=()=>{ if(done) return; done=true; restore(); renderDocs(); };
+  inp.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.preventDefault(); commit(); }
+    else if(e.key==='Escape'){ e.preventDefault(); cancel(); }
+    e.stopPropagation();
+  });
+  inp.addEventListener('blur', commit);
+  inp.addEventListener('click', e=>e.stopPropagation());
+}
 /* Pinned user docs (max 2, device-local): sanitize against deleted ids. */
 function pinnedIds(){
   store.pinned=(store.pinned||[]).filter(id=>store.docs.some(d=>d.id===id && !d.protected)).slice(0,2);
@@ -4302,16 +4326,14 @@ function boot(){
     const id=docMenuTarget; closeDocMenu();
     if(!id) return;
     if(btn.dataset.act==='rename'){
-      // a pinned doc has no list row → rename right on its tab; a list doc →
-      // rename its row; the active UNPINNED doc (shown in the top-bar slot) lives
-      // only in the manager list, so open it first, then rename the row there.
-      let nameEl=document.querySelector('#pinned-tabs .doc-tab[data-id="'+id+'"]')
-              || document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name');
-      if(!nameEl){
-        if(!docFindOpen()) toggleMenu('docfind-menu'); else renderDocFind();
-        nameEl=document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name');
-      }
-      if(nameEl) beginRename(id, nameEl);
+      // rename where the doc actually lives: a pinned doc on its tab, a manager
+      // list row in the popover, or the active UNPINNED doc right on its top-bar
+      // pill (which has no tab/row).
+      const pinnedTab=document.querySelector('#pinned-tabs .doc-tab[data-id="'+id+'"]');
+      const listRow=document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name');
+      if(pinnedTab) beginRename(id, pinnedTab);
+      else if(listRow) beginRename(id, listRow);
+      else if(doc() && doc().id===id) beginRenamePill(id);
     } else if(btn.dataset.act==='delete'){
       requestDeleteDoc(id);
     } else if(btn.dataset.act==='pin'){
