@@ -2328,6 +2328,13 @@ function renderSelection(){
     }
   }
   const rows=[...rowsMap.values()].sort((x,y)=>x.top-y.top);
+  // In a multi-row selection whose first line begins with a marker/indent
+  // (checkbox, //, #, leading spaces), the first row's text starts AFTER that
+  // prefix, so without this it sat inset while the full rows below reached the
+  // left edge — a ragged left step. If the selection starts at/within that
+  // prefix, pull the first row out to the left edge too so the block is flush.
+  const firstCls=classify(lines[a.line]);
+  const firstLead=firstCls.markerLen || (lines[a.line].match(/^\s*/)[0].length);
   // 2) every row except the LAST fills to the right edge (its line-break is
   //    selected); every row below the FIRST starts at the left edge — so whole
   //    interior lines become identical full-width bars, like the number-colour wash.
@@ -2335,6 +2342,7 @@ function renderSelection(){
     if(i<rows.length-1) rows[i].right=contentRight;
     if(i>0) rows[i].left=contentLeft;
   }
+  if(rows.length>1 && a.col<=firstLead) rows[0].left=contentLeft;   // flush the first row's left
   // 3) emit; a run of identical (full-width) rows fuses via square inner corners
   const geomSame=(x,y)=> x&&y && Math.abs(x.left-y.left)<=1 && Math.abs(x.right-y.right)<=1;
   let html='';
@@ -4160,6 +4168,15 @@ function boot(){
   // top-bar dropdown triggers (calcuta / documents-loupe)
   $('brand-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('brand-menu'); });
   $('doc-find-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('docfind-menu'); });
+  // right-click / long-press the active-doc slot → rename / delete it (the slot
+  // only names an UNPINNED, non-stock doc; stock/pinned docs have their own tabs)
+  $('doc-find-btn').addEventListener('contextmenu', e=>{
+    const d=doc();
+    if(!d || d.protected || (store.pinned||[]).includes(d.id)) return;
+    e.preventDefault(); e.stopPropagation();
+    closeMenus();
+    openDocMenu(e.clientX, e.clientY, d.id);
+  });
   // theme choice inside the calcuta menu (menu stays open for further tweaks)
   $('brand-menu').addEventListener('click', e=>{
     const th=e.target.closest('.theme-opt');
@@ -4282,9 +4299,15 @@ function boot(){
     const id=docMenuTarget; closeDocMenu();
     if(!id) return;
     if(btn.dataset.act==='rename'){
-      // a pinned doc has no list row - rename right on its tab instead
-      const nameEl=document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name')
-                || document.querySelector('#pinned-tabs .doc-tab[data-id="'+id+'"]');
+      // a pinned doc has no list row → rename right on its tab; a list doc →
+      // rename its row; the active UNPINNED doc (shown in the top-bar slot) lives
+      // only in the manager list, so open it first, then rename the row there.
+      let nameEl=document.querySelector('#pinned-tabs .doc-tab[data-id="'+id+'"]')
+              || document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name');
+      if(!nameEl){
+        if(!docFindOpen()) toggleMenu('docfind-menu'); else renderDocFind();
+        nameEl=document.querySelector('#docfind-list .doc-item[data-id="'+id+'"] .doc-name');
+      }
       if(nameEl) beginRename(id, nameEl);
     } else if(btn.dataset.act==='delete'){
       requestDeleteDoc(id);
