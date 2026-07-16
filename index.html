@@ -1884,6 +1884,29 @@ function render(){
    merely loading the app (or seeding the stock docs on a device that has
    never saved anything locally) never looks "newer" than a real cloud save.
    Only an actual edit should move `updated` forward. */
+/* ---- Lamport-style logical clock for sync ordering ----
+   The per-document/tag `updated` field orders the merge. Using raw wall-clock
+   Date.now() is DEFEATED BY CLIENT CLOCK SKEW: a device whose clock runs ahead
+   (e.g. a work PC set wrong) stamps a HIGHER number than a later edit made on a
+   correctly-set device, so the older content wins the merge and can even
+   overwrite the server. A logical clock fixes this: it advances past every
+   timestamp we OBSERVE (local or remote), so any edit made after seeing
+   another device's version always gets a strictly higher number — causality is
+   respected regardless of wall-clock differences. stamp() also stays close to
+   real time (max with Date.now()) so timestamps remain human-meaningful. */
+let _clock = 0;
+function observeTime(t){ if(typeof t==='number' && isFinite(t) && t>_clock) _clock=t; }
+function stamp(){ _clock = Math.max(_clock+1, Date.now()); return _clock; }
+/* Advance the clock past everything already in a store (called on load and for
+   every remote snapshot) so the next local stamp() beats all of it. */
+function observeStore(s){
+  if(!s) return;
+  (s.docs||[]).forEach(d=>observeTime(d && d.updated));
+  (s.tags||[]).forEach(t=>observeTime(t && t.updated));
+  observeTime(s.tagsUpdated);
+  const scan=m=>{ if(m&&typeof m==='object') for(const k in m) observeTime(m[k]); };
+  scan(s.deletedDocs); scan(s.deletedTags);
+}
 function saveLocal(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
 }
@@ -1893,7 +1916,7 @@ function persist(){
   // bump an untouched doc and let its stale copy out-compete a newer edit made
   // to the same doc on another device. Real edits already bumped `updated` in
   // onChange(); by the time this debounced save runs, text===value → no re-bump.
-  const d=doc(); if(d && d.text!==input.value){ d.text=input.value; d.updated=Date.now(); }
+  const d=doc(); if(d && d.text!==input.value){ d.text=input.value; d.updated=stamp(); }
   store.updated=Date.now();
   saveLocal();
   cloudSave();
@@ -1998,6 +2021,8 @@ function load(){
   }
   if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
 
+  observeStore(store);   // seed the logical clock past everything already stored
+
   applyResultsWidth(store.resultsWidth);
   loadActiveIntoEditor();
   renderTags();
@@ -2035,7 +2060,7 @@ function switchDoc(id){
 function createDoc(){
   persist();
   const n=store.docs.length+1;
-  const d={ id:uid(), name:'Документ '+n, text:'', lineColors:{}, updated:Date.now() };
+  const d={ id:uid(), name:'Документ '+n, text:'', lineColors:{}, updated:stamp() };
   store.docs.push(d);
   store.activeId=d.id;
   loadActiveIntoEditor();
@@ -2056,7 +2081,7 @@ function deleteDoc(id){
   store.docs.splice(idx,1);
   // tombstone so the deletion propagates to other devices instead of the doc
   // being resurrected by the next merge from a device that still has it.
-  store.deletedDocs[id]=Date.now();
+  store.deletedDocs[id]=stamp();
   if(wasActive){ store.activeId=store.docs[Math.max(0,idx-1)].id; loadActiveIntoEditor(); }
   else renderDocs();
   persist();
@@ -2070,7 +2095,7 @@ function beginRename(id, nameEl){
   nameEl.replaceWith(inp);
   inp.focus(); inp.select();
   let done=false;
-  const commit=()=>{ if(done) return; done=true; d.name=(inp.value.trim()||'Без названия'); d.updated=Date.now(); renderDocs(); scheduleSave(); };
+  const commit=()=>{ if(done) return; done=true; d.name=(inp.value.trim()||'Без названия'); d.updated=stamp(); renderDocs(); scheduleSave(); };
   const cancel=()=>{ if(done) return; done=true; renderDocs(); };
   inp.addEventListener('keydown', e=>{
     if(e.key==='Enter'){ e.preventDefault(); commit(); }
@@ -2409,7 +2434,7 @@ function onChange(){
   // gap between a keystroke and its save would merge against old text and
   // could drop the just-typed edit. `updated` moves forward too, so the local
   // edit always wins the per-doc merge.
-  const d=doc(); if(d){ d.text=input.value; d.updated=Date.now(); }
+  const d=doc(); if(d){ d.text=input.value; d.updated=stamp(); }
   render(); scheduleSave();
   refreshAutocomplete();
 }
@@ -2787,7 +2812,7 @@ function addTag(){
   const color=$('tag-color').value;
   if(!name) return;
   const key=name.toLowerCase();
-  const now=Date.now();
+  const now=stamp();
   if(!store.tags.some(t=>t.label.toLowerCase()===key)) store.tags.push({label:name,color,updated:now});
   if(store.deletedTags) delete store.deletedTags[key];   // re-adding a previously deleted tag revives it
   store.tagsUpdated=now;
@@ -3415,6 +3440,11 @@ function initAuth(){
   firebase.initializeApp(firebaseConfig);
   auth=firebase.auth();
   db=firebase.firestore();
+  // Durable offline write queue (IndexedDB): a save made on a weak/again-off
+  // VPN, mobile data or right before the tab/computer closes is persisted
+  // locally and flushed to the server as soon as connectivity returns — it can
+  // no longer be lost in memory. synchronizeTabs allows several open tabs.
+  try{ if(db.enablePersistence) db.enablePersistence({synchronizeTabs:true}).catch(()=>{}); }catch(e){}
   auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
   auth.onAuthStateChanged(onAuthChanged);
   // Completes a signInWithRedirect() round trip (from the popup fallback
@@ -3706,6 +3736,7 @@ function subscribeCloud(){
     }
     const remote=parseRemote(snap.data());
     if(!remote){ if(first){ first=false; cloudReady=true; } return; }
+    observeStore(remote);   // advance the logical clock past everything the cloud has seen
     const merged=mergeStores(store, remote);
     const suppressed=adoptMerged(merged);
     if(suppressed) deferRemote(remote);              // re-merge once typing pauses
@@ -3873,7 +3904,7 @@ async function openSharedView(){
   $('sb-import').addEventListener('click', ()=>importSharedDoc(data));
 }
 function importSharedDoc(data){
-  const d={ id:uid(), name:data.n||'Присланный документ', text:data.t, lineColors:{}, updated:Date.now() };
+  const d={ id:uid(), name:data.n||'Присланный документ', text:data.t, lineColors:{}, updated:stamp() };
   store.docs.push(d); store.activeId=d.id;
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
   history.replaceState(null,'',location.pathname);   // drop the #doc= hash
@@ -3978,14 +4009,14 @@ function boot(){
   $('tag-list').addEventListener('click', e=>{
     const del=e.target.closest('.del'); if(!del) return;
     const i=+del.dataset.i, t=store.tags[i]; if(!t) return;
-    const now=Date.now();
+    const now=stamp();
     if(store.deletedTags) store.deletedTags[t.label.toLowerCase()]=now;   // tombstone so the delete syncs
     store.tags.splice(i,1); store.tagsUpdated=now; renderTags(); render(); scheduleSave();
   });
   $('tag-list').addEventListener('input', e=>{
     const rec=e.target.closest('.tag-recolor'); if(!rec) return;
     const i=+rec.dataset.i, t=store.tags[i]; if(!t) return;
-    t.color=rec.value; t.updated=Date.now(); store.tagsUpdated=Date.now();
+    t.color=rec.value; t.updated=stamp(); store.tagsUpdated=stamp();
     const dot=rec.parentElement; if(dot) dot.style.background=t.color;   // live preview, don't rebuild (keeps the picker open)
     render(); scheduleSave();
   });
@@ -4170,6 +4201,10 @@ function boot(){
   // debounced timers freeze on mobile and may never fire otherwise
   document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') flushSync(); });
   window.addEventListener('pagehide', flushSync);
+  // desktop window/tab close: some browsers fire beforeunload but skip pagehide.
+  // We don't cancel the unload (no returnValue), just get the write queued — the
+  // durable Firestore offline queue guarantees it reaches the server next launch.
+  window.addEventListener('beforeunload', flushSync);
   // reflect connectivity in the sync pip; a regained connection re-pushes
   window.addEventListener('offline', ()=>setSyncStatus('offline'));
   window.addEventListener('online', ()=>{ setSyncStatus('saved'); if(cloudReady) pushCloud(); });
@@ -4182,6 +4217,7 @@ document.addEventListener('DOMContentLoaded', boot);
 /* expose a tiny hook for automated testing */
 window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluateLenient, tokenizeMath, normalizePasted, dateAt,
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
+  stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
 
 })();
