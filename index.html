@@ -158,7 +158,10 @@ button{font-family:inherit;color:inherit}
 .bm-item.active .bm-check{visibility:visible}
 .bm-item .bm-ic{width:15px;flex:0 0 auto;opacity:.8}
 /* theme choice: both options on one row; the active one is an oval pill */
-.theme-row{display:flex;gap:6px;padding:3px 4px}
+.theme-row,.doc-row{display:flex;gap:6px;padding:3px 4px}
+.doc-opt{flex:0 0 auto;padding:6px 15px;border:0;border-radius:999px;background:none;
+  color:var(--text);font-size:13px;cursor:pointer;font-family:inherit}
+.doc-opt:hover{background:var(--bg-editor)}
 .theme-opt{flex:0 0 auto;padding:6px 15px;border:0;border-radius:999px;background:none;
   color:var(--text);font-size:13px;cursor:pointer;font-family:inherit}
 .theme-opt:hover{background:var(--bg-editor)}
@@ -566,9 +569,10 @@ button{font-family:inherit;color:inherit}
   background:var(--bg);}
 .authgate-card{width:min(340px,86vw);text-align:center;padding:36px 28px;border:1px solid var(--border);
   border-radius:14px;background:var(--bg-panel);}
-.authgate-logo{width:44px;height:44px;margin:0 auto 14px;border-radius:10px;background:var(--accent-soft);
-  color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:600}
-.authgate-title{font-size:17px;font-weight:600;color:var(--text-strong)}
+/* wordmark styled like the top-bar brand (mono, lowercase), scaled up for the
+   login card hero */
+.authgate-brand{font-family:var(--font-mono);font-weight:600;font-size:24px;
+  color:var(--text-strong);letter-spacing:.5px;margin-bottom:4px}
 .authgate-sub{margin-top:6px;font-size:12.5px;color:var(--dim);line-height:1.5}
 .authgate-btn{margin-top:22px;width:100%;display:flex;align-items:center;justify-content:center;gap:10px;
   padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:#fff;color:#1f1f1f;
@@ -591,8 +595,7 @@ button{font-family:inherit;color:inherit}
 <!-- ================= MARKUP ================= -->
 <div id="authgate">
   <div class="authgate-card">
-    <div class="authgate-logo">∑</div>
-    <div class="authgate-title">Calcuta</div>
+    <div class="authgate-brand">calcuta</div>
     <div class="authgate-sub">Войдите через Google, чтобы документы синхронизировались между всеми вашими устройствами</div>
     <button id="google-signin" class="authgate-btn" type="button">
       <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 01-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.26c-.81.54-1.84.87-3.05.87-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 009 18z"/><path fill="#FBBC05" d="M3.96 10.72A5.4 5.4 0 013.68 9c0-.6.1-1.18.28-1.72V4.95H.96A9 9 0 000 9c0 1.45.35 2.83.96 4.05l3-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 00.96 4.95l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/></svg>
@@ -608,9 +611,11 @@ button{font-family:inherit;color:inherit}
         <button class="brand-name" id="brand-btn" type="button" aria-haspopup="true" aria-expanded="false">calcuta</button>
         <div class="tb-menu brand-menu" id="brand-menu" role="menu" hidden>
           <div class="bm-title">Документ</div>
-          <button class="bm-item" id="exp-pdf" type="button">pdf</button>
-          <button class="bm-item" id="exp-word" type="button">word</button>
-          <button class="bm-item" id="share-link" type="button">url</button>
+          <div class="doc-row">
+            <button class="doc-opt" id="exp-pdf" type="button">pdf</button>
+            <button class="doc-opt" id="exp-word" type="button">word</button>
+            <button class="doc-opt" id="share-link" type="button">url</button>
+          </div>
           <div class="bm-sep"></div>
           <div class="theme-row">
             <button class="theme-opt" data-theme="dark" type="button">Тёмная</button>
@@ -3996,7 +4001,7 @@ function boot(){
   $('brand-menu').addEventListener('click', e=>{
     const th=e.target.closest('.theme-opt');
     if(th){ setTheme(th.dataset.theme); return; }   // stays open for further tweaks
-    const it=e.target.closest('.bm-item'); if(!it) return;
+    const it=e.target.closest('.doc-opt,.bm-item'); if(!it) return;
     if(it.id==='exp-word'){ exportWord(); closeMenus(); return; }
     if(it.id==='exp-pdf'){ exportPDF(); closeMenus(); return; }
     if(it.id==='share-link'){ shareLink(); closeMenus(); return; }
