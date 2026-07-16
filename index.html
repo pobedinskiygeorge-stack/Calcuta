@@ -133,7 +133,9 @@ button{font-family:inherit;color:inherit}
   color:var(--text-strong);letter-spacing:.5px;
   background:none;border:0;padding:2px;cursor:pointer;flex:0 0 auto;
 }
-.brand-name:hover{color:var(--accent)}
+/* accent only while the dropdown is open (aria-expanded flips on open/close),
+   never on plain hover */
+.brand-name[aria-expanded="true"]{color:var(--accent)}
 
 /* generic dropdown anchored under a top-bar control */
 .tb-menu-wrap{position:relative;display:inline-flex;flex:0 0 auto}
@@ -408,8 +410,11 @@ button{font-family:inherit;color:inherit}
 /* "//" supertask heading: purple label pill hugging the heading text. The
    box-shadow spread fattens the pill without touching layout metrics, and
    box-decoration-break keeps the fill on every wrapped fragment. */
-#highlight .super-pill{background:var(--super-soft);box-shadow:0 0 0 3px var(--super-soft);
-  border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+#highlight .super-pill{background:var(--super-soft);box-shadow:0 0 0 2px var(--super-soft);
+  border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone;
+  /* horizontal breathing room without shifting the monospace overlay: the padding
+     is cancelled by an equal negative margin so the glyph advance stays 0 */
+  padding:0 5px;margin:0 -5px}
 #highlight .header{color:var(--comment)}
 #highlight .var{color:var(--var);font-weight:500}
 /* A USAGE of a variable is a label pill (same green as the hover oval);
@@ -648,28 +653,6 @@ button{font-family:inherit;color:inherit}
 
         <div class="ref">
           <div class="ref-group">
-            <div class="ref-h">Математика</div>
-            <div class="row"><code>2*8 + 10%</code><span class="desc">живой расчёт → правая колонка</span></div>
-            <div class="row"><code>+ − × ÷ ^ %</code><span class="desc">операции (× можно как <code class="mini">x</code>)</span></div>
-            <div class="row"><code>(2+3)*4</code><span class="desc">скобки — порядок</span></div>
-            <div class="row"><code>500k · 2M</code><span class="desc">тысячи · миллионы</span></div>
-            <div class="row"><code>500/3 ()</code><span class="desc">«()» — округлить вверх до десятков</span></div>
-          </div>
-          <div class="ref-group">
-            <div class="ref-h">Проценты</div>
-            <div class="row"><code>100 + 25%</code><span class="desc">± процент</span></div>
-            <div class="row"><code>25% of 100</code><span class="desc">процент от числа → 25</span></div>
-          </div>
-          <div class="ref-group">
-            <div class="ref-h">Переменные</div>
-            <div class="row"><code>бюджет = 500k</code><span class="desc">зелёная, действует в своём разделе <code class="mini">//</code></span></div>
-            <div class="note">Использование переменной — в пилюле; наведение подсвечивает оригинал. Клик копирует имя, двойной — правит написание.</div>
-          </div>
-          <div class="ref-group">
-            <div class="ref-h">Агрегаты</div>
-            <div class="row"><code>sum avg prev</code><span class="desc">сумма · среднее · пред. результат блока выше</span></div>
-          </div>
-          <div class="ref-group">
             <div class="ref-h">Задачи</div>
             <div class="row"><code>++ · хх</code><span class="desc">начало/конец строки → чекбокс</span></div>
             <div class="row"><code>[ ] [x]</code><span class="desc">клик по галочке — выполнено</span></div>
@@ -687,11 +670,6 @@ button{font-family:inherit;color:inherit}
             <div class="row"><code>/имя</code><span class="desc">строки с этим тэгом подсвечены целиком</span></div>
             <div class="row"><code>/12.05</code><span class="desc">то же для даты</span></div>
             <div class="note">Тэг подсвечивает своё слово везде (приоритет ниже переменных).</div>
-          </div>
-          <div class="ref-group">
-            <div class="ref-h">Числа</div>
-            <div class="row"><code>3,14</code><span class="desc">разделитель — запятая</span></div>
-            <div class="row"><code>2 500 000</code><span class="desc">тысячи группируются сами</span></div>
           </div>
           <div class="ref-group">
             <div class="ref-h">Клавиши</div>
