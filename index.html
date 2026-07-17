@@ -462,7 +462,7 @@ button{font-family:inherit;color:inherit}
 
 #input{
   position:absolute;top:0;left:0;width:100%;height:100%;z-index:3;resize:none;overflow:hidden;
-  background:transparent;color:transparent;caret-color:var(--accent);
+  background:transparent;color:transparent;caret-color:transparent;   /* real caret hidden -- #caretlayer draws a custom block instead */
   outline:none;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;
 }
 /* The native selection is made invisible in the editor: a custom rounded
@@ -491,6 +491,23 @@ button{font-family:inherit;color:inherit}
   position:absolute;width:3ch;height:var(--lh);cursor:pointer;pointer-events:auto;border-radius:4px;
 }
 .cbox-hit:hover{background:var(--row-hover)}
+
+/* custom block caret: solid, non-blinking, terminal-style. It covers the
+   character AFTER the caret offset (not before, like the native thin caret) --
+   .caret-glyph redraws that one character in a forced-contrast color on top,
+   so it stays readable no matter what its underlying syntax color was. */
+#caretlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:5;pointer-events:none}
+.caret-block{position:absolute;background:var(--accent)}
+.caret-glyph{
+  position:absolute;height:var(--lh);line-height:var(--lh);
+  font-family:var(--font-mono);font-size:var(--fs);letter-spacing:var(--ls);
+  color:#1a1006;white-space:pre;overflow:hidden;
+}
+.caret-ghost{
+  position:absolute;height:var(--lh);line-height:var(--lh);
+  font-family:var(--font-mono);font-size:var(--fs);letter-spacing:var(--ls);
+  color:var(--dim);opacity:.55;white-space:pre;
+}
 
 /* results column */
 #results{
@@ -734,6 +751,7 @@ button{font-family:inherit;color:inherit}
         <textarea id="input" class="layer" spellcheck="false" autocomplete="off"
                   autocapitalize="off"></textarea>
         <div id="hotspots"></div>
+        <div id="caretlayer"></div>
       </div>
       <div id="results-resize" title="потяните, чтобы изменить ширину"></div>
       <div id="results"></div>
@@ -1749,7 +1767,7 @@ const input=$('input'), highlight=$('highlight'),
       gutter=$('gutter'), results=$('results'), hotspots=$('hotspots'),
       stack=$('stack'), editor=$('editor'), ctxmenu=$('ctxmenu'),
       linemenu=$('linemenu'), docmenu=$('docmenu'), toast=$('toast'),
-      searchlayer=$('searchlayer'), sellayer=$('sellayer'), pillhover=$('pillhover');
+      searchlayer=$('searchlayer'), sellayer=$('sellayer'), pillhover=$('pillhover'), caretlayer=$('caretlayer');
 
 const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text, name and
@@ -2029,6 +2047,7 @@ function render(){
   syncScroll();
   if(searchQuery){ computeMatches(); renderSearch(); }
   renderSelection();   // re-place the rounded selection overlay after layout
+  renderCaret();        // re-place the custom block caret + empty-line ghost
 }
 
 /* ---------- persistence ---------- */
@@ -3369,6 +3388,69 @@ function charRangeRects(row, start, end){
   });
 }
 
+/* The single-character cell the block caret should cover (the char AFTER the
+   caret offset, terminal/vim convention), in viewport coordinates.
+   Chromium can emit a spurious ~0px leading ClientRect right at a span
+   boundary (i.e. right after any syntax-color change — extremely common:
+   before every number, after every operator, right after a checkbox marker),
+   so the WIDEST rect is always taken, never the first one, or the caret would
+   render as an invisible sliver exactly there. End-of-line and empty-line
+   positions measure to ~0 width too (no character to size against) — both
+   fall back to a fixed charW-wide cell instead of trusting that literally. */
+function caretCellRect(row, col){
+  const el=highlight.children[row]; if(!el) return null;
+  const raw=(input.value.split('\n'))[row]||'';
+  const rects=charRangeRects(row, col, col+1);
+  let best=null;
+  for(const r of rects) if(!best || r.width>best.width) best=r;
+  if(best && best.width>=1){
+    const cp=raw.codePointAt(col);                       // codepoint-safe: a
+    const ch=cp!==undefined ? String.fromCodePoint(cp) : ''; // surrogate-pair
+    return {left:best.left, top:best.top, width:best.width, height:best.height, ch};
+  }
+  if(best) return {left:best.left, top:best.top, width:charW, height:best.height, ch:''};
+  const er=el.getBoundingClientRect();
+  return {left:er.left, top:er.top, width:charW, height:LH, ch:''};
+}
+/* Custom block caret (the native one is invisible, caret-color:transparent)
+   plus the faint "Type something..." ghost on a completely empty line. Both
+   hide together whenever there's an active selection or focus has left the
+   editor — mirrors renderSelection's own visibility rule exactly. */
+/* Belt-and-suspenders against drift: while the editor is focused, a cheap
+   rAF loop re-checks selectionStart/End every frame and repaints only if it
+   actually changed. selectionchange already covers every scenario tested
+   (click, all arrow directions, Home/End, Ctrl+Arrow word-jump, Shift+Arrow,
+   Ctrl+A, programmatic setSelectionRange, touch tap), but WebKit has a known
+   history of lagging selectionchange during an active native selection-handle
+   drag -- this closes that gap for ~0 cost (two integer reads) whenever
+   nothing changed, and stops entirely on blur so it never runs idle. */
+let caretWatchId=null, caretWatchLast='';
+function caretWatchTick(){
+  const key=input.selectionStart+':'+input.selectionEnd;
+  if(key!==caretWatchLast){ caretWatchLast=key; renderCaret(); }
+  caretWatchId=requestAnimationFrame(caretWatchTick);
+}
+function startCaretWatch(){ if(caretWatchId==null){ caretWatchLast=''; caretWatchId=requestAnimationFrame(caretWatchTick); } }
+function stopCaretWatch(){ if(caretWatchId!=null){ cancelAnimationFrame(caretWatchId); caretWatchId=null; } }
+function renderCaret(){
+  if(!caretlayer) return;
+  const s=input.selectionStart, e=input.selectionEnd;
+  if(document.activeElement!==input || s==null || e==null || s!==e){ caretlayer.innerHTML=''; return; }
+  const {row,col}=offsetToLineCol(s);
+  const cell=caretCellRect(row,col);
+  if(!cell){ caretlayer.innerHTML=''; return; }
+  const sb=stack.getBoundingClientRect();
+  const top=cell.top-sb.top+stack.scrollTop, left=cell.left-sb.left+stack.scrollLeft;
+  const w=Math.max(cell.width,2);
+  let html='<div class="caret-block" style="top:'+Math.round(top)+'px;left:'+Math.round(left)+'px;width:'+w+'px;height:'+cell.height+'px"></div>';
+  if(cell.ch) html+='<div class="caret-glyph" style="top:'+Math.round(top)+'px;left:'+Math.round(left)+'px;width:'+w+'px">'+esc(cell.ch)+'</div>';
+  const raw=(input.value.split('\n'))[row]||'';
+  if(raw===''){
+    html+='<div class="caret-ghost" style="top:'+Math.round(top)+'px;left:'+Math.round(left+w+2)+'px">Type something...</div>';
+  }
+  caretlayer.innerHTML=html;
+}
+
 /* Oval pill background behind a variable — shown ONLY while the mouse is
    actually over it (hover-only affordance hinting it's clickable), never
    persistent, unlike result/link pills which always look like pills. */
@@ -4234,9 +4316,10 @@ function boot(){
   input.addEventListener('keydown', onEditorKeydown);
   input.addEventListener('keyup', e=>{
     if(acOpen() && (e.key==='ArrowUp'||e.key==='ArrowDown')) return;   // popup is navigating, keep it open
-    if(e.key.startsWith('Arrow')||e.key==='Home'||e.key==='End'||e.key.startsWith('Page')){ snapCaret(); hideAutocomplete(); }
+    if(e.key.startsWith('Arrow')||e.key==='Home'||e.key==='End'||e.key.startsWith('Page')){ snapCaret(); hideAutocomplete(); renderCaret(); }
   });
-  input.addEventListener('mouseup', ()=>{ setTimeout(snapCaret,0); hideAutocomplete(); });
+  input.addEventListener('mouseup', ()=>{ setTimeout(()=>{ snapCaret(); renderCaret(); },0); hideAutocomplete(); });
+  input.addEventListener('touchend', ()=>{ renderCaret(); });   // mobile: tap / drag-handle release (redundant with selectionchange, closes any WebKit lag)
   input.addEventListener('blur', ()=>{ canonicalizeNumbers(); hideAutocomplete(); });
   input.addEventListener('scroll', hideAutocomplete);
   // accept a suggestion by tapping it (preventDefault keeps textarea focus)
@@ -4248,8 +4331,12 @@ function boot(){
 
   document.addEventListener('selectionchange', selectionGutterSync);
   document.addEventListener('selectionchange', renderSelection);   // rounded selection overlay
+  document.addEventListener('selectionchange', renderCaret);       // block caret + empty-line ghost
   input.addEventListener('blur', ()=>setTimeout(selectionGutterSync,0));
   input.addEventListener('blur', ()=>{ if(sellayer) sellayer.innerHTML=''; });   // drop the overlay when focus leaves
+  input.addEventListener('blur', ()=>{ if(caretlayer) caretlayer.innerHTML=''; stopCaretWatch(); });
+  input.addEventListener('focus', startCaretWatch);
+  if(document.activeElement===input) startCaretWatch();
   stack.addEventListener('mousemove', onStackMove);
   stack.addEventListener('mouseleave', onStackLeave);
   stack.addEventListener('contextmenu', onStackCtx);
