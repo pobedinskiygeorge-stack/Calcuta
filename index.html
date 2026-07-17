@@ -3875,9 +3875,10 @@ function onAuthChanged(user){
     // subscribeCloud(), silently killing cross-device sync after sign-in.
     setSyncStatus(navigator.onLine?'saved':'offline');
     subscribeCloud();
+    refreshIdToken();   // cache a bearer token for the keepalive close-flush (see below)
   }else{
     $('authgate').style.display='flex';
-    cloudReady=false; cloudRef=null;
+    cloudReady=false; cloudRef=null; cachedIdToken=null;
     if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
     setSyncStatus();   // hides the pip
   }
@@ -4097,14 +4098,20 @@ function subscribeCloud(){
   if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
   cloudUnsub=cloudRef.onSnapshot({includeMetadataChanges:true}, snap=>{
     if(snap.metadata.hasPendingWrites) return;      // our own optimistic write echoing back
-    // Only ever reconcile/seed against AUTHORITATIVE SERVER data. When a phone
-    // boots offline or with a cold cache, Firestore first delivers a fromCache
-    // snapshot that reports the cloud doc as missing (or stale). Acting on it
-    // would run the "cloud is empty → seed it" branch below and push THIS
-    // device's freshly-seeded STOCK content over the real cloud copy, wiping
-    // the user's notes. includeMetadataChanges guarantees we still receive the
-    // later cache→server transition even when the underlying data is unchanged.
-    if(snap.metadata.fromCache) return;
+    // Only ever SEED against authoritative server data. A fromCache snapshot that
+    // reports the doc MISSING can be a cold-cache lie (offline/blocked boot) — acting
+    // on it would run the "cloud empty → seed it" branch and push THIS device's
+    // freshly-seeded STOCK content over the real cloud, wiping the user's notes. So
+    // that specific case still waits for the server.
+    // BUT a fromCache snapshot that HAS data is safe to merge against (merge is
+    // non-destructive), and crucially it lets a device whose live server channel is
+    // slow or blocked (corporate firewall/VPN, weak mobile) still flip cloudReady and
+    // START UPLOADING. The writes then enter Firestore's durable offline queue and
+    // flush the moment connectivity returns — instead of sitting only in this
+    // device's localStorage all session and dying when it's shut down (the exact
+    // cross-device "my last edits didn't show up" failure). includeMetadataChanges
+    // still delivers the later cache→server transition, which re-merges and corrects.
+    if(snap.metadata.fromCache && !snap.exists) return;
     if(!snap.exists){
       if(first){ first=false; cloudReady=true; pushCloud(); }   // cloud truly empty (server-confirmed): seed it
       return;
@@ -4119,6 +4126,7 @@ function subscribeCloud(){
     const diverged = syncPayload(merged)!==syncPayload(remote);
     if(first){ first=false; cloudReady=true; }
     if(diverged) pushCloud();                        // cloud was missing some of our data → push merge
+    else lastSyncedPayload=syncPayload(merged);      // cloud already has everything → mark clean
   }, syncError);
 }
 
@@ -4138,16 +4146,24 @@ function deferRemote(remote){
     pushCloud();   // publish the settled merge so every device converges
   }, 4500);
 }
+// Dirtiness is derived from CONTENT, not a hand-toggled flag: lastSyncedPayload
+// holds the syncPayload() string that the server last confirmed (via an ack or a
+// non-diverged snapshot). isCloudDirty() = the store's current syncPayload differs
+// from that. This is immune to debounce/timer interleaving that made a boolean
+// flag unreliable. `everEdited` avoids warning on a no-edit offline close.
+let lastSyncedPayload=null, everEdited=false, cachedIdToken=null;
+function isCloudDirty(){ return !!currentUser && everEdited && syncPayload(store)!==lastSyncedPayload; }
 function pushCloud(){
   if(!db||!currentUser||!cloudRef||!cloudReady) return;
   clearTimeout(cloudSaveTimer);
   setSyncStatus('saving');
   cloudSaveTimer=setTimeout(()=>{
+    const sent=syncPayload(store);                     // snapshot the content being written
     cloudRef.set({ data: JSON.stringify(store), updated: Date.now() })
-      .then(()=>{ syncError(null); setSyncStatus('saved'); }).catch(syncError);
+      .then(()=>{ lastSyncedPayload=sent; syncError(null); setSyncStatus('saved'); }).catch(syncError);
   }, 500);
 }
-function cloudSave(){ if(cloudReady) pushCloud(); }
+function cloudSave(){ everEdited=true; if(cloudReady) pushCloud(); }
 /* Immediate push — no debounce. For moments when timers are about to freeze
    (phone backgrounds the tab / page is closing): the 300ms save and 500ms
    push timers never fire there, so an edit made just before switching apps
@@ -4157,8 +4173,40 @@ function flushSync(){
   if(!db||!currentUser||!cloudRef||!cloudReady) return;
   clearTimeout(cloudSaveTimer);
   setSyncStatus('saving');
+  const sent=syncPayload(store);
   cloudRef.set({ data: JSON.stringify(store), updated: Date.now() })
-    .then(()=>{ syncError(null); setSyncStatus('saved'); }).catch(syncError);
+    .then(()=>{ lastSyncedPayload=sent; syncError(null); setSyncStatus('saved'); }).catch(syncError);
+}
+/* Keep a fresh bearer token cached so the keepalive close-flush below can send
+   an authenticated REST write synchronously (getIdToken is async and can't be
+   awaited during page unload). Firebase ID tokens live ~1h; refresh well inside
+   that. */
+function refreshIdToken(){
+  if(!currentUser||!currentUser.getIdToken) return;
+  currentUser.getIdToken().then(t=>{ cachedIdToken=t; }).catch(()=>{});
+}
+/* Reliable last-write on close. The SDK's set() above is async and the browser
+   does NOT wait for pending network work when the page unloads (or the OS shuts
+   down), so the final edit could be lost. A fetch(..., {keepalive:true}) IS
+   allowed to outlive the page (up to ~64KB), so we write the current store
+   straight to the Firestore REST API here. Authenticated with the cached token,
+   so it passes the same per-user security rules as the SDK path. Skipped when
+   oversized (keepalive cap) — the SDK/offline-queue path still covers that. */
+function keepaliveFlush(){
+  if(!currentUser||!cachedIdToken||!navigator.onLine) return;
+  const body=JSON.stringify({ fields:{
+    data:{ stringValue: JSON.stringify(store) },
+    updated:{ integerValue: String(Date.now()) },
+  }});
+  if(body.length>60000) return;                       // keepalive body cap (~64KB) — leave margin
+  const url='https://firestore.googleapis.com/v1/projects/'+firebaseConfig.projectId+
+    '/databases/(default)/documents/users/'+currentUser.uid+
+    '?updateMask.fieldPaths=data&updateMask.fieldPaths=updated';
+  try{
+    fetch(url,{ method:'PATCH', keepalive:true,
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+cachedIdToken },
+      body });
+  }catch(e){}
 }
 
 /* ================================================================
@@ -4597,15 +4645,23 @@ function boot(){
   window.addEventListener('resize', ()=>{ measureChar(); applyResultsWidth(store.resultsWidth); render(); });
   // flush pending edits the moment the tab goes to background / closes —
   // debounced timers freeze on mobile and may never fire otherwise
-  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') flushSync(); });
-  window.addEventListener('pagehide', flushSync);
-  // desktop window/tab close: some browsers fire beforeunload but skip pagehide.
-  // We don't cancel the unload (no returnValue), just get the write queued — the
-  // durable Firestore offline queue guarantees it reaches the server next launch.
-  window.addEventListener('beforeunload', flushSync);
+  // On hide/close, fire BOTH the SDK flush (works if the page lingers) and the
+  // keepalive REST write (survives a hard unload/OS shutdown) — belt and suspenders.
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden'){ flushSync(); keepaliveFlush(); } });
+  window.addEventListener('pagehide', ()=>{ flushSync(); keepaliveFlush(); });
+  // desktop window/tab close. Fire the flushes, and if there are still-unsynced
+  // changes (never server-acked — offline, blocked, or edited in the last instant)
+  // surface the browser's "leave site?" prompt so the user doesn't walk away
+  // thinking it saved. Only when signed in and actually dirty, so it's not noise.
+  window.addEventListener('beforeunload', e=>{
+    flushSync(); keepaliveFlush();
+    if(isCloudDirty()){ e.preventDefault(); e.returnValue=''; return ''; }
+  });
   // reflect connectivity in the sync pip; a regained connection re-pushes
   window.addEventListener('offline', ()=>setSyncStatus('offline'));
-  window.addEventListener('online', ()=>{ setSyncStatus('saved'); if(cloudReady) pushCloud(); });
+  window.addEventListener('online', ()=>{ setSyncStatus('saved'); refreshIdToken(); if(cloudReady) pushCloud(); });
+  // keep the keepalive token fresh (Firebase ID tokens expire ~1h)
+  setInterval(refreshIdToken, 1800000);
 
   // keep gutter/results scrolled with editor vertical scroll is automatic (flex children)
 }
