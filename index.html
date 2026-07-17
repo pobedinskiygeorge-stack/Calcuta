@@ -947,7 +947,11 @@ function evalCurrency(content){
     i++;
   }
   if(!terms.length) return null;
-  const tgt = target || (terms.every(t=>t.cur==='RUB') ? 'USD' : 'RUB');
+  // Rubles never auto-convert: a bare ruble amount ("500 руб") shows no
+  // conversion — it needs an explicit target ("500 руб to euro" / "500 rub to usd").
+  // Foreign amounts (USD/EUR) DO auto-convert to rubles when no target is given.
+  if(!target && terms.every(t=>t.cur==='RUB')) return null;
+  const tgt = target || 'RUB';
   if(!fxReady()) return { value:null, cur:tgt, terms, pending:true };
   let rub=0; for(const t of terms) rub += t.sign * t.amount * fxRates[t.cur];
   return { value: rub/fxRates[tgt], cur:tgt, terms };
