@@ -4,10 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Calcuta — редактор с математикой</title>
+<!-- PWA: installable, launches full-screen, works offline (see sw.js / manifest). -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1c1a18">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Calcuta">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 </head>
 <body>
 <!-- Apply the saved theme before first paint so there's no dark→light flash. -->
 <script>try{if((localStorage.getItem('calcuta.theme')||'dark')==='light')document.documentElement.classList.add('light');}catch(e){}</script>
+<!-- Register the service worker (offline + fast launch). Relative path so it
+     works under a GitHub Pages project subpath; failures are non-fatal. -->
+<script>if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});}</script>
 <!-- Firebase (Google sign-in + Firestore sync) — loaded with `defer` so it
      never blocks first paint; ready by DOMContentLoaded, when boot() wires it up. -->
 <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
