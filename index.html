@@ -284,22 +284,6 @@ button{font-family:inherit;color:inherit}
 .doc-item:hover .doc-del{opacity:1}
 .doc-item .doc-del:hover{color:var(--accent)}
 
-/* syntax & functions reference (lives in the Тэги tab) */
-.ref{margin-top:22px;border-top:1px solid var(--border-soft);padding-top:16px;
-  display:flex;flex-direction:column;gap:15px}
-.ref-group{display:flex;flex-direction:column;gap:7px}
-.ref-h{font-size:11px;text-transform:uppercase;letter-spacing:.9px;color:var(--dim);font-weight:600}
-.ref .row{display:flex;gap:10px;align-items:baseline;font-size:12px}
-.ref code{
-  font-family:var(--font-mono);background:var(--bg-editor);border:1px solid var(--border-soft);
-  padding:1px 6px;border-radius:5px;color:var(--text);white-space:nowrap;flex:0 0 auto;min-width:74px;
-  text-align:center;
-}
-.ref code.mini{min-width:0;padding:0 4px}
-.ref .desc{color:var(--dim);line-height:1.45}
-.ref .desc code.mini{white-space:nowrap}
-.ref .note{font-size:11.5px;line-height:1.5;color:var(--dim)}
-
 /* ---------- Workspace ---------- */
 #workspace{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;background:var(--bg-editor);position:relative}
 
@@ -690,34 +674,6 @@ button{font-family:inherit;color:inherit}
             <button class="swatch-btn" id="tag-swatch" title="цвет тэга"><input id="tag-color" type="color" value="#e0663f"></button>
           </div>
           <div class="tag-list" id="tag-list"></div>
-
-        <div class="ref">
-          <div class="ref-group">
-            <div class="ref-h">Задачи</div>
-            <div class="row"><code>++ · хх</code><span class="desc">начало/конец строки → чекбокс</span></div>
-            <div class="row"><code>[ ] [x]</code><span class="desc">клик по галочке — выполнено</span></div>
-          </div>
-          <div class="ref-group">
-            <div class="ref-h">Структура</div>
-            <div class="row"><code>//</code><span class="desc">надзадача (фиолетовая), ниже — отступ</span></div>
-            <div class="row"><code># текст</code><span class="desc">комментарий (и в конце строки: <code class="mini">5+5 #прим</code>) — в расчётах не участвует</span></div>
-            <div class="row"><code>12.05</code><span class="desc">дата дд.мм (жёлтая)</span></div>
-            <div class="row"><code>текст:</code><span class="desc">метка-ярлык (оранжевая)</span></div>
-            <div class="row"><code>"цитата"</code><span class="desc">текст в кавычках (фиолетовый)</span></div>
-          </div>
-          <div class="ref-group">
-            <div class="ref-h">Тэги · прожектор</div>
-            <div class="row"><code>/имя</code><span class="desc">строки с этим тэгом подсвечены целиком</span></div>
-            <div class="row"><code>/12.05</code><span class="desc">то же для даты</span></div>
-            <div class="note">Тэг подсвечивает своё слово везде (приоритет ниже переменных).</div>
-          </div>
-          <div class="ref-group">
-            <div class="ref-h">Клавиши</div>
-            <div class="row"><code>⌘/Ctrl F</code><span class="desc">поиск в документе</span></div>
-            <div class="row"><code>⌘/Ctrl Z</code><span class="desc">отмена / +Shift повтор</span></div>
-            <div class="row"><code>⌘/Ctrl ⌫</code><span class="desc">стереть слово</span></div>
-          </div>
-        </div>
         </div>
       </div>
       <div class="doc-tabs" id="doc-tabs">
