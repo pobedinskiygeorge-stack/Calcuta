@@ -58,6 +58,7 @@
   --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
   --fs:16px;   /* numbr-like scale: fewer lines on screen, better legibility */
   --lh:28px;
+  --ls:-0.5px;             /* tighter spacing (kept in the char-width probe too so the caret stays aligned) */
   --pad-y:14px;
   --pad-x:16px;
   --gutter-w:30px;
@@ -379,7 +380,7 @@ button{font-family:inherit;color:inherit}
 
 .layer{
   margin:0;padding:var(--pad-y) var(--pad-x);
-  font-family:var(--font-mono);font-size:var(--fs);line-height:var(--lh);
+  font-family:var(--font-mono);font-size:var(--fs);line-height:var(--lh);letter-spacing:var(--ls);
   /* Wrap only at word boundaries — never split a word across rows. A single
      token longer than the whole line still breaks (last resort) so it can't
      overflow and desync the overlay. #input below must carry the identical
@@ -1652,7 +1653,7 @@ function computeCharsPerLine(){
 function measureChar(){
   const probe=document.createElement('span');
   probe.style.cssText='position:absolute;visibility:hidden;white-space:pre;'+
-    'font-family:var(--font-mono);font-size:var(--fs)';
+    'font-family:var(--font-mono);font-size:var(--fs);letter-spacing:var(--ls)';
   probe.textContent='0000000000';
   document.body.appendChild(probe);
   charW=probe.getBoundingClientRect().width/10;
