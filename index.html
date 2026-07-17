@@ -41,6 +41,7 @@
   --date:#e3b755;          /* dates dd.mm (yellow) */
   --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
   --num:#7ec8f5;           /* numbers in a computation (sky blue) */
+  --cur:#d9b45a;           /* currency words руб/USD/EUR (gold) */
   --op-work:#e8a24e;       /* working arithmetic signs (orange) */
   --label:#e8a24e;         /* "текст:" labels (orange, always) */
   --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
@@ -88,6 +89,7 @@
   --date:#b07d10;
   --date-spot:rgba(176,125,16,.14);
   --num:#2b7fc4;
+  --cur:#b58024;
   --op-work:#cc7519;
   --label:#cc7519;
   --op:#8a8272;
@@ -417,6 +419,11 @@ button{font-family:inherit;color:inherit}
      is cancelled by an equal negative margin so the glyph advance stays 0 */
   padding:0 5px;margin:0 -5px}
 #highlight .header{color:var(--comment)}
+#highlight .cur{color:var(--cur);font-weight:500;cursor:help}   /* currency word (hover → ЦБ РФ rate) */
+.fx-tip{position:fixed;z-index:200;display:none;pointer-events:none;
+  background:var(--bg-panel);color:var(--text-strong);border:1px solid var(--border);
+  border-radius:8px;padding:6px 10px;font-size:12px;font-family:var(--font-mono);
+  white-space:nowrap;box-shadow:0 6px 20px rgba(0,0,0,.28)}
 #highlight .var{color:var(--var);font-weight:500}
 /* A USAGE of a variable is a label pill (same green as the hover oval);
    the defining occurrence (LHS of "name = ...") stays plain green - only the
@@ -503,6 +510,9 @@ button{font-family:inherit;color:inherit}
 }
 .result-line.has:hover .pill{background:rgba(160,158,150,.28);color:var(--text-strong)}
 .result-line.copied .pill{background:var(--accent);color:#fff}
+/* currency conversion result: gold-tinted pill */
+.result-line .pill.cur{background:color-mix(in srgb, var(--cur) 20%, transparent);color:var(--cur)}
+.result-line.has:hover .pill.cur{background:color-mix(in srgb, var(--cur) 30%, transparent)}
 /* calc error: a muted "??" token, not copyable */
 .result-line .pill.err{background:rgba(201,100,66,.14);color:var(--accent);cursor:default}
 /* gentle fade when a result value appears or changes (only the changed pill) */
@@ -1379,7 +1389,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const cr = item.calcRange;
   const inCalc = k => !cr || (k>=cr[0] && k<cr[1]);
   // char-class array; higher priority overrides
-  const P={base:0, num:1, date:2, op:3, label:4, quote:5, tag:6, varr:7, link:8, doclink:9, cmt:10};
+  const P={base:0, num:1, date:2, op:3, label:4, quote:5, cur:5.5, tag:6, varr:7, link:8, doclink:9, cmt:10};
   const cclass=new Array(len).fill('');   // css class per char
   const cmeta =new Array(len).fill(null); // {type, defLine} for hover
   const prio  =new Array(len).fill(-1);
@@ -1429,6 +1439,16 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
         const ch=scanText[k];
         if('+-*/^%'.includes(ch) && prio[k]<P.op && inCalc(k)) paint(k,k+1,'opx',P.op,{type:'op'});
         else if('()='.includes(ch) && prio[k]<P.op) paint(k,k+1,'op',P.op,{type:'op'});
+      }
+    }
+    // ---- currency words (only on a line that actually converts) — coloured and
+    //      hoverable so the ЦБ РФ rate shows on hover ----
+    if(item.currency){
+      let ci=bodyStart;
+      while(ci<len){
+        const cw=matchCurAt(scanText,ci);
+        if(cw && (cmtStart<0 || ci<cmtStart)){ paint(ci,ci+cw.len,'cur',P.cur,{type:'cur',code:cw.code}); ci+=cw.len; continue; }
+        ci++;
       }
     }
     // ---- "текст:" labels: a phrase directly followed by a colon is ALWAYS
@@ -3391,12 +3411,26 @@ function onStackMove(e){
     else showPillHover(hoverRow, pillRng.start, pillRng.end);
   }
   else hidePillHover();
+  // hovering a currency word → floating popup with the current ЦБ РФ rate
+  const meta=(hoverRow>=0 && model && model.meta[hoverRow]) ? model.meta[hoverRow][col] : null;
+  if(meta && meta.type==='cur' && meta.code!=='RUB') showFxTip(e.clientX, e.clientY, meta.code);
+  else hideFxTip();
   // Hovering a variable shows ONLY its oval pill — no whole-line tint at all.
   // The full-line "reference" highlight remains solely on result-pill hover
   // (onResultHover below).
   setRowFx();
 }
-function onStackLeave(){ hoverRow=-1; srcRow=-1; hidePillHover(); setRowFx(); }
+function onStackLeave(){ hoverRow=-1; srcRow=-1; hidePillHover(); hideFxTip(); setRowFx(); }
+function showFxTip(x,y,code){
+  let t=document.getElementById('fx-tip');
+  if(!t){ t=document.createElement('div'); t.id='fx-tip'; t.className='fx-tip'; document.body.appendChild(t); }
+  t.textContent=fxRateLine(code);
+  t.style.display='block';
+  const pad=12, w=t.offsetWidth, h=t.offsetHeight;
+  t.style.left=Math.min(x+14, window.innerWidth-w-pad)+'px';
+  t.style.top=Math.max(pad, y-h-12)+'px';
+}
+function hideFxTip(){ const t=document.getElementById('fx-tip'); if(t) t.style.display='none'; }
 
 /* Highlight the source line when hovering a result pill. */
 function onResultHover(e){
