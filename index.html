@@ -857,6 +857,99 @@ const KEYWORDS = new Set([
   'avg','average','mean','сред','среднее','средн'
 ]);
 
+/* ================================================================
+   [CURRENCY] Convert руб / USD / EUR at the OFFICIAL ЦБ РФ daily rate
+   (cbr-xml-daily.ru — CORS-enabled mirror of the Central Bank fixing).
+   Accuracy: the exact ЦБ rate. It updates ONCE per business day (~11:30 MSK),
+   not intraday — so this is the accounting/reference rate, NOT a live exchange
+   (MOEX) quote. Rates are cached in localStorage and refreshed hourly; a fresh
+   rate re-renders open conversions and the hover popup.
+   ================================================================ */
+const CUR_WORDS = [
+  ['долларов','USD'],['доллары','USD'],['доллара','USD'],['доллар','USD'],['долл','USD'],['usd','USD'],['$','USD'],
+  ['euro','EUR'],['евро','EUR'],['eur','EUR'],['€','EUR'],
+  ['рублей','RUB'],['рубля','RUB'],['рубль','RUB'],['руб','RUB'],['rub','RUB'],['₽','RUB'],
+].sort((a,b)=>b[0].length-a[0].length);
+const CUR_SYMBOL = { RUB:'₽', USD:'$', EUR:'€' };
+const CUR_LABEL  = { RUB:'руб', USD:'USD', EUR:'EUR' };
+const CUR_CONV_RE = /^(?:в|in|to)(?![\p{L}])/iu;   // "100 usd В руб" / "in" / "to"
+
+/* Match a currency word at position i → {code,len} (word-boundary aware for
+   letter words; symbols $ € ₽ match anywhere). */
+function matchCurAt(text, i){
+  const rest=text.slice(i);
+  for(const [w,code] of CUR_WORDS){
+    if(rest.length<w.length) continue;
+    if(rest.slice(0,w.length).toLowerCase()!==w) continue;
+    if(/[a-zа-яё]/i.test(w)){
+      const before=text[i-1]||' ', after=text[i+w.length]||' ';
+      if(/[\p{L}\d_]/u.test(before)) continue;      // must start at a word boundary
+      if(/[\p{L}\d]/u.test(after)) continue;         // and end at one ("eur" not inside "european")
+    }
+    return { code, len:w.length };
+  }
+  return null;
+}
+
+// FX: RUB per 1 unit of the currency (RUB itself = 1)
+let fxRates={ RUB:1, USD:0, EUR:0 };
+let fxMeta ={ date:'', fetchedAt:0, source:'ЦБ РФ', ok:false };
+function fxReady(){ return fxRates.USD>0 && fxRates.EUR>0; }
+function loadFxCache(){
+  try{ const c=JSON.parse(localStorage.getItem('calcuta.fx')||'null');
+    if(c && c.rates && c.rates.USD){ fxRates=c.rates; fxMeta=c.meta||fxMeta; } }catch(e){}
+}
+function fetchFx(){
+  fetch('https://www.cbr-xml-daily.ru/daily_json.js', {cache:'no-store'})
+    .then(r=>r.ok?r.json():null)
+    .then(d=>{
+      if(!d || !d.Valute || !d.Valute.USD || !d.Valute.EUR) return;
+      const rate=v=>v.Value/(v.Nominal||1);
+      fxRates={ RUB:1, USD:rate(d.Valute.USD), EUR:rate(d.Valute.EUR) };
+      fxMeta={ date:(d.Date||'').slice(0,10), fetchedAt:Date.now(), source:'ЦБ РФ', ok:true };
+      try{ localStorage.setItem('calcuta.fx', JSON.stringify({rates:fxRates, meta:fxMeta})); }catch(e){}
+      if(typeof render==='function' && typeof input!=='undefined') render();
+    }).catch(()=>{});
+}
+
+/* Parse a line as a currency expression → {value,cur,terms,pending} or null.
+   Terms are (±amount currency); an optional "в|in|to CUR" (or a bare trailing
+   currency word) sets the target. Default target: RUB for a foreign source,
+   USD for a RUB source. */
+function evalCurrency(content){
+  const s=content; const terms=[]; let target=null, sign=1, pend=null, expectTarget=false;
+  let i=0; const n=s.length;
+  while(i<n){
+    const c=s[i];
+    if(c===' '||c==='\t'||c===OSP||c===SENT){ i++; continue; }
+    const kw=s.slice(i).match(CUR_CONV_RE);
+    if(kw){ expectTarget=true; i+=kw[0].length; continue; }
+    if(c==='+'||c==='-'){ sign=(c==='-')?-1:1; i++; continue; }
+    const nm=s.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
+    if(nm && /\d/.test(nm[0])){ pend=parseNum(nm[0]); i+=nm[0].length; continue; }
+    const cw=matchCurAt(s,i);
+    if(cw){
+      if(expectTarget){ target=cw.code; expectTarget=false; }
+      else if(pend!==null){ terms.push({sign, amount:pend, cur:cw.code}); pend=null; sign=1; }
+      else target=cw.code;                              // lone currency word → target
+      i+=cw.len; continue;
+    }
+    i++;
+  }
+  if(!terms.length) return null;
+  const tgt = target || (terms.every(t=>t.cur==='RUB') ? 'USD' : 'RUB');
+  if(!fxReady()) return { value:null, cur:tgt, terms, pending:true };
+  let rub=0; for(const t of terms) rub += t.sign * t.amount * fxRates[t.cur];
+  return { value: rub/fxRates[tgt], cur:tgt, terms };
+}
+/* One-line human rate string for the hover popup, e.g. "USD → 78,50 ₽  ·  ЦБ РФ · 17.07.2025". */
+function fxRateLine(code){
+  if(code==='RUB' || !fxReady()) return fxReady()? '' : 'курс ЦБ РФ загружается…';
+  const per=fxRates[code];
+  const d=fxMeta.date ? fxMeta.date.split('-').reverse().join('.') : '';
+  return CUR_LABEL[code]+' → '+fmt(Math.round(per*100)/100)+' ₽   ·   ЦБ РФ'+(d?' · '+d:'');
+}
+
 function tokenizeMath(text, vars){
   const toks = [];
   let i=0; const n=text.length;
@@ -1248,13 +1341,22 @@ function analyze(text){
       }
     }
 
-    // feed aggregation (skip boundary/heading lines)
-    if(result!==null && cls.kind!=='super' && cls.kind!=='header'){
+    // currency conversion: overrides the plain result on non-heading, non-assign
+    // lines that carry a currency amount (руб/USD/EUR). Its converted value is
+    // NOT fed into sum/avg (mixing units would be wrong).
+    let currency=null;
+    if(cls.kind!=='super' && cls.kind!=='header' && !assignedName){
+      const cur=evalCurrency(stripLineComment(content));
+      if(cur){ currency=cur; result = cur.pending ? null : cur.value; }
+    }
+
+    // feed aggregation (skip boundary/heading lines and currency lines)
+    if(result!==null && !currency && cls.kind!=='super' && cls.kind!=='header'){
       ctx.contig.push(result);
       ctx.prev=result;
     }
 
-    out.push({raw:line, cls, content, result, assignedName, calcRange, error, dateCount, section:sec});
+    out.push({raw:line, cls, content, result, assignedName, calcRange, error, dateCount, currency, section:sec});
   });
 
   return {lines:out, varsBySection, varDefLineBySection, scopesBySection};
@@ -1870,7 +1972,16 @@ function render(){
       const left=(it.cls.indent||0)*charW + 16;   // + padX
       hs+='<div class="cbox-hit" data-i="'+k+'" style="top:'+top+'px;left:'+left+'px"></div>';
     }
-    if(it.result!==null || it.error){
+    if(it.currency && (it.result!==null || it.currency.pending)){
+      // currency conversion pill: "7 850 \u20bd" (or "\u2026" while the rate is loading)
+      const cy=it.currency;
+      const disp = cy.pending ? '\u2026' : fmt(Math.round(it.result*100)/100)+' '+CUR_SYMBOL[cy.cur];
+      const anim = resultsPainted && prevResultVals[k]!==undefined && prevResultVals[k]!==disp ? ' changed' : '';
+      newResultVals[k]=disp;
+      const dv = cy.pending ? '' : ' data-v="'+esc(plain(Math.round(it.result*100)/100))+'"';
+      rs+='<div class="result-line'+(cy.pending?'':' has')+'" data-i="'+k+'"'+dv+' style="height:'+h+'px">'
+        +'<span class="pill cur'+anim+'">'+esc(disp)+'</span></div>';
+    }else if(it.result!==null || it.error){
       const disp = it.error ? '\u2047' : fmt(it.result);   // U+2047 = "??" glyph
       // fade a pill only when its shown value actually changed at this row
       // (nice while typing); never on the very first paint of the document.
@@ -4072,6 +4183,9 @@ function boot(){
   computeCharsPerLine();
   buildSwatches();
   load();
+  // currency rates: show last-known immediately, then refresh from ЦБ РФ and
+  // keep them fresh every hour (the fetch re-renders open conversions).
+  loadFxCache(); fetchFx(); setInterval(fetchFx, 3600000);
   if(location.hash.indexOf('#doc=')===0) openSharedView();   // read-only shared link
   else initAuth();
 
@@ -4377,6 +4491,7 @@ document.addEventListener('DOMContentLoaded', boot);
 window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluateLenient, tokenizeMath, normalizePasted, dateAt,
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
+  evalCurrency, matchCurAt, fxRateLine, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
 
 })();
