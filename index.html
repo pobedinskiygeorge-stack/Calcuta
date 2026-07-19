@@ -670,8 +670,8 @@ button{font-family:inherit;color:inherit}
           <div class="bm-sep"></div>
           <div class="bm-title">Тэги</div>
           <div class="tag-form">
-            <input id="tag-name" type="text" placeholder="имя тэга, ↵ — добавить" maxlength="24" autocomplete="off">
-            <button class="swatch-btn" id="tag-swatch" title="цвет тэга"><input id="tag-color" type="color" value="#e0663f"></button>
+            <input id="tag-name" type="text" maxlength="24" autocomplete="off">
+            <button class="swatch-btn" id="tag-swatch"><input id="tag-color" type="color" value="#e0663f"></button>
           </div>
           <div class="tag-list" id="tag-list"></div>
         </div>
@@ -3071,7 +3071,7 @@ function renderTags(){
     '<div class="tag-chip"><span class="dot" style="background:'+t.color+'" title="изменить цвет">'+
     '<input type="color" class="tag-recolor" data-i="'+idx+'" value="'+t.color+'"></span>'+
     '<span class="label">'+esc(t.label)+'</span>'+
-    '<button class="del" data-i="'+idx+'" title="удалить">×</button></div>').join('');
+    '<button class="del" data-i="'+idx+'">×</button></div>').join('');
 }
 function addTag(){
   const name=$('tag-name').value.trim();
