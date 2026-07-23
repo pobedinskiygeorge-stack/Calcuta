@@ -6,7 +6,7 @@
 <title>Calcuta — редактор с математикой</title>
 <!-- PWA: installable, launches full-screen, works offline (see sw.js / manifest). -->
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#1c1a18">
+<meta name="theme-color" content="#161d26">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -32,17 +32,17 @@
      ============================================================ -->
 
 <style>
-/* ---------- Theme (warm dark, Claude-like) ---------- */
+/* ---------- Theme (cool dark, Telegram-like navy) ---------- */
 :root{
-  --bg:#1c1a18;
-  --bg-editor:#211f1c;
-  --bg-panel:#171614;
-  --border:#332f2a;
-  --border-soft:#2a2723;
-  --text:#d8d3ca;          /* default / subtask text */
-  --text-strong:#f3efe8;   /* subtasks (white) */
-  --dim:#6b665c;           /* gutter, muted */
-  --dim-2:#4d4941;
+  --bg:#161d26;
+  --bg-editor:#1a222c;
+  --bg-panel:#121820;
+  --border:#2b3643;
+  --border-soft:#212b35;
+  --text:#d3d8de;          /* default / subtask text */
+  --text-strong:#eef2f7;   /* subtasks (white) */
+  --dim:#6a7480;           /* gutter, muted */
+  --dim-2:#454f5a;
   --accent:#c96442;        /* Claude clay */
   --accent-soft:rgba(201,100,66,.16);
   --var:#5ecb7e;           /* variables (green, richer than the old sage) — top priority */
@@ -65,7 +65,7 @@
   --sel:rgba(255,150,70,.30);   /* translucent enough to read the text through it */
   --sel-text:#ffefe0;      /* forced text color under selection (any syntax color stays readable) */
   --link:#6fb2f0;          /* URL pill */
-  --scroll-thumb:#3a3630;
+  --scroll-thumb:#37424e;
 
   --font-mono:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,'Liberation Mono',monospace;
   --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
@@ -460,6 +460,7 @@ button{font-family:inherit;color:inherit}
   position:absolute;top:0;left:0;width:100%;height:100%;z-index:3;resize:none;overflow:hidden;
   background:transparent;color:transparent;caret-color:transparent;   /* real caret hidden -- #caretlayer draws a custom block instead */
   outline:none;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;
+  -webkit-touch-callout:none;   /* mobile: no long-press Copy/Look-Up callout over the editor text */
 }
 /* The native selection is made invisible in the editor: a custom rounded
    overlay (#sellayer) draws the selection instead, so it can have oval corners
@@ -908,11 +909,112 @@ function fetchFx(){
     }).catch(()=>{});
 }
 
+/* ---- currency-aware expression evaluation --------------------------------
+   The original evalCurrency() (kept below as the fallback) just SUMS the
+   signed currency amounts on a line and silently drops every scalar and
+   "×" / "÷" operator — so "(200$ + 100$) / 0,6 * 1,03" computed only 300$ and
+   threw the "/0,6*1,03" away. tokenizeCur + evalCur run the SAME precedence rules as
+   evaluate(), but each value carries a `money` flag (its amount kept in RUB) so
+   bare numbers compose with currency amounts as scalar multipliers/divisors.
+   A currency amount times/over a plain number stays money; money÷money is a
+   plain ratio. Only lines that tokenize cleanly and consume every token take
+   this path; anything messier (prose around the amount, juxtaposed terms with
+   no operator, an unrecognised token) returns null and falls back to the old
+   lenient summation, so no existing currency line changes behaviour. */
+function tokenizeCur(s){
+  const toks=[]; let i=0; const n=s.length;
+  let target=null, expectTarget=false, sawMoney=false, sawForeign=false;
+  while(i<n){
+    const c=s[i];
+    if(c===' '||c==='\t'||c===OSP||c===SENT){ i++; continue; }
+    const kw=s.slice(i).match(CUR_CONV_RE);
+    if(kw){ expectTarget=true; i+=kw[0].length; continue; }
+    if('+-*/^()%'.includes(c)){ toks.push({t:c}); i++; continue; }
+    const nm=s.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
+    if(nm && /\d/.test(nm[0])){
+      const v=parseNum(nm[0]); i+=nm[0].length;
+      let j=i; while(j<n && (s[j]===' '||s[j]===OSP)) j++;   // amount may be followed by its currency word
+      const cw=matchCurAt(s,j);
+      if(cw){ toks.push({t:'money', v, cur:cw.code}); sawMoney=true; if(cw.code!=='RUB') sawForeign=true; i=j+cw.len; }
+      else toks.push({t:'num', v});
+      continue;
+    }
+    const cw=matchCurAt(s,i);
+    if(cw){ if(expectTarget){ target=cw.code; expectTarget=false; } else target=cw.code; i+=cw.len; continue; }
+    return null;   // unknown token → let the lenient summation fallback handle this line
+  }
+  return {toks, target, sawMoney, sawForeign};
+}
+function evalCur(content){
+  const parsed=tokenizeCur(content);
+  if(!parsed || !parsed.sawMoney) return null;
+  const {toks, target, sawForeign}=parsed;
+  // pure-RUB amounts with no explicit target aren't a conversion (mirrors the
+  // fallback rule) — let plain math own the line instead.
+  if(!target && !sawForeign) return null;
+  const tgt = target || 'RUB';
+  let p=0; const peek=()=>toks[p], next=()=>toks[p++]; const EOF={};
+  const V=(v,money,pct)=>({v, money:!!money, pct:!!pct});
+  const num=nd=> nd.pct ? nd.v/100 : nd.v;
+  function parseExpr(){ return parseAdd(); }
+  function parseAdd(){
+    let a=parseMul();
+    while(peek() && (peek().t==='+'||peek().t==='-')){
+      const op=next().t; let b; try{ b=parseMul(); }catch(e){ if(e===EOF) return a; throw e; }
+      if(b.pct) a=V(op==='+'? a.v + a.v*b.v/100 : a.v - a.v*b.v/100, a.money);
+      else      a=V(op==='+'? num(a)+num(b) : num(a)-num(b), a.money||b.money);
+    }
+    return a;
+  }
+  function parseMul(){
+    let a=parseUnary();
+    while(peek() && (peek().t==='*'||peek().t==='/')){
+      const op=next().t; let b; try{ b=parseUnary(); }catch(e){ if(e===EOF) return a; throw e; }
+      if(op==='*') a=V(num(a)*num(b), a.money||b.money);
+      else if(a.money && b.money) a=V(num(a)/num(b), false);   // money ÷ money → plain ratio
+      else a=V(num(a)/num(b), a.money||b.money);
+    }
+    return a;
+  }
+  function parseUnary(){
+    if(peek() && peek().t==='-'){ next(); const u=parseUnary(); return V(-u.v, u.money, u.pct); }
+    if(peek() && peek().t==='+'){ next(); return parseUnary(); }
+    return parsePow();
+  }
+  function parsePow(){
+    let a=parsePostfix();
+    if(peek() && peek().t==='^'){ next(); let b; try{ b=parseUnary(); }catch(e){ if(e===EOF) return a; throw e; } return V(Math.pow(num(a),num(b)), a.money); }
+    return a;
+  }
+  function parsePostfix(){
+    let a=parsePrimary();
+    while(peek() && peek().t==='%'){ next(); a=V(a.v, a.money, true); }
+    return a;
+  }
+  function parsePrimary(){
+    const tk=peek(); if(!tk) throw EOF;
+    if(tk.t==='num'){ next(); return V(tk.v, false); }
+    if(tk.t==='money'){ next(); return V(tk.v*fxRates[tk.cur], true); }   // normalise to RUB
+    if(tk.t==='('){ next(); const e=parseExpr(); if(peek()&&peek().t===')') next(); else throw 0; return e; }
+    throw 0;
+  }
+  let r; try{ r=parseExpr(); }catch(e){ return null; }
+  if(p!==toks.length) return null;      // leftover tokens → fall back to summation
+  if(!r || !r.money) return null;       // result isn't money → not a currency line
+  if(!fxReady()) return { value:null, cur:tgt, pending:true };
+  const rub = r.pct ? r.v/100 : r.v;
+  const value = rub / fxRates[tgt];
+  if(!isFinite(value)) return null;
+  return { value, cur:tgt, terms:[] };
+}
+
 /* Parse a line as a currency expression → {value,cur,terms,pending} or null.
    Terms are (±amount currency); an optional "в|in|to CUR" (or a bare trailing
    currency word) sets the target. Default target: RUB for a foreign source,
    USD for a RUB source. */
 function evalCurrency(content){
+  const strict=evalCur(content);   // operator-aware path first (scalars + */÷ compose with amounts)
+  if(strict) return strict;
   const s=content; const terms=[]; let target=null, sign=1, pend=null, expectTarget=false;
   let i=0; const n=s.length;
   while(i<n){
@@ -3499,21 +3601,11 @@ function onResultLeave(){ srcRow=-1; setRowFx(); }
    the keyboard — no accidental swipe deletes. */
 let holdTimer=null, holdInfo=null;
 function cancelHold(){ if(holdTimer){ clearTimeout(holdTimer); holdTimer=null; } holdInfo=null; }
-function onTouchStart(e){
-  if(e.touches.length!==1){ cancelHold(); return; }
-  const t=e.touches[0]; const {row}=hitTest(t.clientX,t.clientY);
-  const lines=model?model.data.lines:[];
-  cancelHold();
-  if(row<0||row>=lines.length) return;
-  holdInfo={x:t.clientX,y:t.clientY,row};
-  holdTimer=setTimeout(()=>{
-    holdTimer=null;
-    if(!holdInfo) return;
-    closeCtxMenu();
-    openLineMenu(holdInfo.x, holdInfo.y, holdInfo.row);
-    if(navigator.vibrate){ try{ navigator.vibrate(12); }catch(err){} }
-  }, 480);
-}
+/* Long-press on the editor text is intentionally inert on mobile: opening the
+   line menu by holding the text was disruptive while typing/selecting. The line
+   menu stays available on desktop via right-click (onStackCtx); the long-press
+   gesture is now reserved solely for the document list (see #docfind-list). */
+function onTouchStart(){ cancelHold(); }
 function onTouchMove(e){
   if(!holdInfo) return;
   const t=e.touches[0]; const dx=t.clientX-holdInfo.x, dy=t.clientY-holdInfo.y;
@@ -4524,6 +4616,7 @@ function boot(){
       const id=item.dataset.id;
       docHoldTimer=setTimeout(()=>{
         docHoldTimer=null; docHoldFired=true;
+        touchHandledAt=Date.now();                      // arm the click-guard so the trailing synthetic click can't open the doc
         openDocMenu(tX, tY, id);                        // no-op for pinned docs
         if(navigator.vibrate){ try{ navigator.vibrate(12); }catch(err){} }
       }, 480);
@@ -4535,7 +4628,7 @@ function boot(){
   }, {passive:true});
   $('docfind-list').addEventListener('touchend', e=>{
     cancelDocHold();
-    if(docHoldFired){ e.preventDefault(); return; }     // long-press already opened the menu
+    if(docHoldFired){ e.preventDefault(); touchHandledAt=Date.now(); return; }   // long-press opened the menu — keep the doc from also opening
     if(tMoved) return;                                  // was a scroll, not a tap
     if(e.target.closest('.doc-name-input')) return;     // typing a new name
     const item=e.target.closest('.doc-item'); if(!item) return;
