@@ -57,6 +57,9 @@
   --op-work:#e8a24e;       /* working arithmetic signs (orange) */
   --label:#e8a24e;         /* "текст:" labels (orange, always) */
   --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
+  --brk0:#e6b450;          /* matched brackets, by nesting depth (rainbow) */
+  --brk1:#e58fd0;
+  --brk2:#4fc7be;
   --result:#8fc7a8;        /* right-column results */
   --checked-bg:rgba(101,158,120,.15);
   --checked-text:#79856f;
@@ -105,6 +108,9 @@
   --op-work:#cc7519;
   --label:#cc7519;
   --op:#8a8272;
+  --brk0:#b5820c;          /* matched brackets, by nesting depth (rainbow) */
+  --brk1:#b5479f;
+  --brk2:#128b82;
   --result:#2f9666;
   --checked-bg:rgba(101,158,120,.16);
   --checked-text:#9a9488;
@@ -412,6 +418,9 @@ button{font-family:inherit;color:inherit}
 #highlight .num{color:var(--num)}
 #highlight .op{color:var(--op)}
 #highlight .opx{color:var(--op-work);font-weight:600}
+#highlight .brk0{color:var(--brk0);font-weight:600}
+#highlight .brk1{color:var(--brk1);font-weight:600}
+#highlight .brk2{color:var(--brk2);font-weight:600}
 #highlight .date{color:var(--date);font-weight:500}
 #highlight .label{color:var(--label);font-weight:500}
 #highlight .quote{color:var(--super)}
@@ -1554,6 +1563,21 @@ function analyze(text){
    ================================================================ */
 function esc(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
+/* Pair up "(" and ")" within [start,end) and give each matched pair a nesting
+   depth, so the highlighter can tint corresponding brackets the same "rainbow"
+   colour (depth 0 = outermost). Returns index -> depth for matched brackets
+   only; unmatched ones are absent and stay muted. */
+const BRK_N=3;   // number of cycling bracket colours (--brk0..--brk2)
+function bracketDepths(text, start, end){
+  const depth=new Map(); const stack=[];
+  for(let k=start;k<end;k++){
+    const c=text[k];
+    if(c==='(') stack.push(k);
+    else if(c===')' && stack.length){ const o=stack.pop(); depth.set(o, stack.length); depth.set(k, stack.length); }
+  }
+  return depth;
+}
+
 function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const {raw, cls} = item;
   const len=raw.length;
@@ -1609,11 +1633,27 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     }
     // ---- operators: working arithmetic signs green (only when computing);
     //      grouping/assignment ( ) = stay muted ----
+    // Matched brackets get a per-depth "rainbow" colour so corresponding pairs
+    // are easy to track; unmatched brackets and "=" stay muted. Only on "mathy"
+    // lines (a digit or arithmetic sign is present), so prose parentheticals
+    // stay plain — and it works while an expression is still being typed, before
+    // it computes (no result yet).
+    const brkEnd = cmtStart<0 ? len : cmtStart;
+    if(/[\d+\-*\/^%]/.test(scanText.slice(bodyStart, brkEnd))){
+      const brk=bracketDepths(scanText, bodyStart, brkEnd);
+      for(let k=bodyStart;k<brkEnd;k++){
+        const ch=scanText[k];
+        if((ch==='('||ch===')') && prio[k]<P.op){
+          const d=brk.get(k);
+          paint(k,k+1, d===undefined?'op':'brk'+(d%BRK_N), P.op, {type:'op'});
+        }
+      }
+    }
     if(hasResult){
       for(let k=bodyStart;k<len;k++){
         const ch=scanText[k];
         if('+-*/^%'.includes(ch) && prio[k]<P.op && inCalc(k)) paint(k,k+1,'opx',P.op,{type:'op'});
-        else if('()='.includes(ch) && prio[k]<P.op) paint(k,k+1,'op',P.op,{type:'op'});
+        else if(ch==='=' && prio[k]<P.op) paint(k,k+1,'op',P.op,{type:'op'});
       }
     }
     // ---- currency words (only on a line that actually converts) — coloured and
@@ -4370,6 +4410,7 @@ function exportStyleBlock(){
     td.lcell{white-space:pre-wrap;word-break:break-word;padding-right:18px}
     td.rcell{text-align:right;white-space:nowrap;color:${c('--result')};font-weight:600;width:1%;padding-left:14px;border-left:1px solid #e6e2d8}
     .num{color:${c('--num')}} .op{color:${c('--op')}} .opx{color:${c('--op-work')};font-weight:600}
+    .brk0{color:${c('--brk0')};font-weight:600} .brk1{color:${c('--brk1')};font-weight:600} .brk2{color:${c('--brk2')};font-weight:600}
     .date{color:${c('--date')};font-weight:500} .label{color:${c('--label')};font-weight:500}
     .quote{color:${c('--super')}} .super{color:${c('--super')}} .header{color:${c('--comment')}}
     .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--dim')}}
