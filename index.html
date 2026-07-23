@@ -53,7 +53,7 @@
   --date:#e3b755;          /* dates dd.mm (yellow) */
   --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
   --num:#7ec8f5;           /* numbers in a computation (sky blue) */
-  --cur:#d9b45a;           /* currency words руб/USD/EUR (gold) */
+  --cur:#d9b45a;           /* "/usd" "/euro" "/yuan" command (gold) */
   --op-work:#e8a24e;       /* working arithmetic signs (orange) */
   --label:#e8a24e;         /* "текст:" labels (orange, always) */
   --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
@@ -104,7 +104,7 @@
   --date:#b07d10;
   --date-spot:rgba(176,125,16,.14);
   --num:#2b7fc4;
-  --cur:#b58024;
+  --cur:#b58024;          /* "/usd" "/euro" "/yuan" command */
   --op-work:#cc7519;
   --label:#cc7519;
   --op:#8a8272;
@@ -434,11 +434,7 @@ button{font-family:inherit;color:inherit}
      is cancelled by an equal negative margin so the glyph advance stays 0 */
   padding:0 5px;margin:0 -5px}
 #highlight .header{color:var(--comment)}
-#highlight .cur{color:var(--cur);font-weight:500;cursor:help}   /* currency word (hover → ЦБ РФ rate) */
-.fx-tip{position:fixed;z-index:200;display:none;pointer-events:none;
-  background:var(--bg-panel);color:var(--text-strong);border:1px solid var(--border);
-  border-radius:8px;padding:6px 10px;font-size:12px;font-family:var(--font-mono);
-  white-space:nowrap;box-shadow:0 6px 20px rgba(0,0,0,.28)}
+#highlight .cur{color:var(--cur);font-weight:600}   /* "/usd" "/euro" "/yuan" currency command */
 #highlight .var{color:var(--var);font-weight:500}
 /* A USAGE of a variable is a label pill (same green as the hover oval);
    the defining occurrence (LHS of "name = ...") stays plain green - only the
@@ -881,36 +877,41 @@ const KEYWORDS = new Set([
    (MOEX) quote. Rates are cached in localStorage and refreshed hourly; a fresh
    rate re-renders open conversions and the hover popup.
    ================================================================ */
-const CUR_WORDS = [
-  ['долларов','USD'],['доллары','USD'],['доллара','USD'],['доллар','USD'],['долл','USD'],['usd','USD'],['$','USD'],
-  ['euro','EUR'],['евро','EUR'],['eur','EUR'],['€','EUR'],
-  ['рублей','RUB'],['рубля','RUB'],['рубль','RUB'],['руб','RUB'],['rub','RUB'],['₽','RUB'],
+/* Currency slash-commands. Typing "/usd", "/euro" or "/yuan" (word-boundary
+   aware, exactly like the "/tag" and "/dd.mm" triggers) shows the live ЦБ РФ
+   rate in the results column as "1 ₽ = x <sym>". Currency conversion of amounts
+   no longer exists — these commands are the whole currency feature. */
+const CUR_CMDS = [
+  ['dollar','USD','$'],['usd','USD','$'],['доллар','USD','$'],
+  ['euro','EUR','€'],['eur','EUR','€'],['евро','EUR','€'],
+  ['yuan','CNY','¥'],['cny','CNY','¥'],['юань','CNY','¥'],
 ].sort((a,b)=>b[0].length-a[0].length);
-const CUR_SYMBOL = { RUB:'₽', USD:'$', EUR:'€' };
-const CUR_LABEL  = { RUB:'руб', USD:'USD', EUR:'EUR' };
-const CUR_CONV_RE = /^(?:в|in|to)(?![\p{L}])/iu;   // "100 usd В руб" / "in" / "to"
-
-/* Match a currency word at position i → {code,len} (word-boundary aware for
-   letter words; symbols $ € ₽ match anywhere). */
-function matchCurAt(text, i){
-  const rest=text.slice(i);
-  for(const [w,code] of CUR_WORDS){
-    if(rest.length<w.length) continue;
-    if(rest.slice(0,w.length).toLowerCase()!==w) continue;
-    if(/[a-zа-яё]/i.test(w)){
-      const before=text[i-1]||' ', after=text[i+w.length]||' ';
-      if(/[\p{L}\d_]/u.test(before)) continue;      // must start at a word boundary
-      if(/[\p{L}\d]/u.test(after)) continue;         // and end at one ("eur" not inside "european")
-    }
-    return { code, len:w.length };
+/* A "/usd|/euro|/yuan" command at position i → {len,code,sym} or null. Same
+   boundary rules as tagTriggerLenAt, so it's never tokenized as a division. */
+function curCmdAt(text, i){
+  if(text[i]!=='/') return null;
+  const before = text[i-1]||' ';
+  if(/[\p{L}\d_]/u.test(before) || before===OSP) return null;
+  const skipOSP = text[i+1]===OSP ? 1 : 0;
+  const start = i+1+skipOSP;
+  for(const [w,code,sym] of CUR_CMDS){
+    if(text.substr(start, w.length).toLowerCase()!==w) continue;
+    const after = text[start+w.length]||' ';
+    if(!/[\p{L}\d_]/u.test(after)) return { len:1+skipOSP+w.length, code, sym };
   }
   return null;
 }
+/* First currency command present on a line (or null). */
+function lineCurCmd(text){
+  for(let i=0;i<text.length;i++){ const c=curCmdAt(text,i); if(c) return {code:c.code, sym:c.sym}; }
+  return null;
+}
+/* "1 ₽ = x $" — format the small per-ruble rate with ~4 significant figures. */
+function fmtRate(x){ return isFinite(x) ? Number(x.toPrecision(4)).toString().replace('.',',') : ''; }
 
 // FX: RUB per 1 unit of the currency (RUB itself = 1)
-let fxRates={ RUB:1, USD:0, EUR:0 };
+let fxRates={ RUB:1, USD:0, EUR:0, CNY:0 };
 let fxMeta ={ date:'', fetchedAt:0, source:'ЦБ РФ', ok:false };
-function fxReady(){ return fxRates.USD>0 && fxRates.EUR>0; }
 function loadFxCache(){
   try{ const c=JSON.parse(localStorage.getItem('calcuta.fx')||'null');
     if(c && c.rates && c.rates.USD){ fxRates=c.rates; fxMeta=c.meta||fxMeta; } }catch(e){}
@@ -920,157 +921,14 @@ function fetchFx(){
     .then(r=>r.ok?r.json():null)
     .then(d=>{
       if(!d || !d.Valute || !d.Valute.USD || !d.Valute.EUR) return;
-      const rate=v=>v.Value/(v.Nominal||1);
-      fxRates={ RUB:1, USD:rate(d.Valute.USD), EUR:rate(d.Valute.EUR) };
+      const rate=v=>v?v.Value/(v.Nominal||1):0;
+      fxRates={ RUB:1, USD:rate(d.Valute.USD), EUR:rate(d.Valute.EUR), CNY:rate(d.Valute.CNY) };
       fxMeta={ date:(d.Date||'').slice(0,10), fetchedAt:Date.now(), source:'ЦБ РФ', ok:true };
       try{ localStorage.setItem('calcuta.fx', JSON.stringify({rates:fxRates, meta:fxMeta})); }catch(e){}
       if(typeof render==='function' && typeof input!=='undefined') render();
     }).catch(()=>{});
 }
 
-/* ---- currency-aware expression evaluation --------------------------------
-   The original evalCurrency() (kept below as the fallback) just SUMS the
-   signed currency amounts on a line and silently drops every scalar and
-   "×" / "÷" operator — so "(200$ + 100$) / 0,6 * 1,03" computed only 300$ and
-   threw the "/0,6*1,03" away. tokenizeCur + evalCur run the SAME precedence rules as
-   evaluate(), but each value carries a `money` flag (its amount kept in RUB) so
-   bare numbers compose with currency amounts as scalar multipliers/divisors.
-   A currency amount times/over a plain number stays money; money÷money is a
-   plain ratio. Only lines that tokenize cleanly and consume every token take
-   this path; anything messier (prose around the amount, juxtaposed terms with
-   no operator, an unrecognised token) returns null and falls back to the old
-   lenient summation, so no existing currency line changes behaviour. */
-function tokenizeCur(s){
-  const toks=[]; let i=0; const n=s.length;
-  let target=null, expectTarget=false, sawMoney=false, sawForeign=false;
-  while(i<n){
-    const c=s[i];
-    if(c===' '||c==='\t'||c===OSP||c===SENT){ i++; continue; }
-    const kw=s.slice(i).match(CUR_CONV_RE);
-    if(kw){ expectTarget=true; i+=kw[0].length; continue; }
-    if(c==='(' && s[i+1]===')'){ i+=2; continue; }   // "()" round-marker → skip (handled separately), never an empty group
-    if('+-*/^()%'.includes(c)){ toks.push({t:c}); i++; continue; }
-    const nm=s.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
-    if(nm && /\d/.test(nm[0])){
-      const v=parseNum(nm[0]); i+=nm[0].length;
-      let j=i; while(j<n && (s[j]===' '||s[j]===OSP)) j++;   // amount may be followed by its currency word
-      const cw=matchCurAt(s,j);
-      if(cw){ toks.push({t:'money', v, cur:cw.code}); sawMoney=true; if(cw.code!=='RUB') sawForeign=true; i=j+cw.len; }
-      else toks.push({t:'num', v});
-      continue;
-    }
-    const cw=matchCurAt(s,i);
-    if(cw){ if(expectTarget){ target=cw.code; expectTarget=false; } else target=cw.code; i+=cw.len; continue; }
-    return null;   // unknown token → let the lenient summation fallback handle this line
-  }
-  return {toks, target, sawMoney, sawForeign};
-}
-function evalCur(content){
-  const parsed=tokenizeCur(content);
-  if(!parsed || !parsed.sawMoney) return null;
-  const {toks, target, sawForeign}=parsed;
-  // pure-RUB amounts with no explicit target aren't a conversion (mirrors the
-  // fallback rule) — let plain math own the line instead.
-  if(!target && !sawForeign) return null;
-  const tgt = target || 'RUB';
-  let p=0; const peek=()=>toks[p], next=()=>toks[p++]; const EOF={};
-  const V=(v,money,pct)=>({v, money:!!money, pct:!!pct});
-  const num=nd=> nd.pct ? nd.v/100 : nd.v;
-  function parseExpr(){ return parseAdd(); }
-  function parseAdd(){
-    let a=parseMul();
-    while(peek() && (peek().t==='+'||peek().t==='-')){
-      const op=next().t; let b; try{ b=parseMul(); }catch(e){ if(e===EOF) return a; throw e; }
-      if(b.pct) a=V(op==='+'? a.v + a.v*b.v/100 : a.v - a.v*b.v/100, a.money);
-      else      a=V(op==='+'? num(a)+num(b) : num(a)-num(b), a.money||b.money);
-    }
-    return a;
-  }
-  function parseMul(){
-    let a=parseUnary();
-    while(peek() && (peek().t==='*'||peek().t==='/')){
-      const op=next().t; let b; try{ b=parseUnary(); }catch(e){ if(e===EOF) return a; throw e; }
-      if(op==='*') a=V(num(a)*num(b), a.money||b.money);
-      else if(a.money && b.money) a=V(num(a)/num(b), false);   // money ÷ money → plain ratio
-      else a=V(num(a)/num(b), a.money||b.money);
-    }
-    return a;
-  }
-  function parseUnary(){
-    if(peek() && peek().t==='-'){ next(); const u=parseUnary(); return V(-u.v, u.money, u.pct); }
-    if(peek() && peek().t==='+'){ next(); return parseUnary(); }
-    return parsePow();
-  }
-  function parsePow(){
-    let a=parsePostfix();
-    if(peek() && peek().t==='^'){ next(); let b; try{ b=parseUnary(); }catch(e){ if(e===EOF) return a; throw e; } return V(Math.pow(num(a),num(b)), a.money); }
-    return a;
-  }
-  function parsePostfix(){
-    let a=parsePrimary();
-    while(peek() && peek().t==='%'){ next(); a=V(a.v, a.money, true); }
-    return a;
-  }
-  function parsePrimary(){
-    const tk=peek(); if(!tk) throw EOF;
-    if(tk.t==='num'){ next(); return V(tk.v, false); }
-    if(tk.t==='money'){ next(); return V(tk.v*fxRates[tk.cur], true); }   // normalise to RUB
-    if(tk.t==='('){ next(); const e=parseExpr(); if(peek()&&peek().t===')') next(); else throw 0; return e; }
-    throw 0;
-  }
-  let r; try{ r=parseExpr(); }catch(e){ return null; }
-  if(p!==toks.length) return null;      // leftover tokens → fall back to summation
-  if(!r || !r.money) return null;       // result isn't money → not a currency line
-  if(!fxReady()) return { value:null, cur:tgt, pending:true };
-  const rub = r.pct ? r.v/100 : r.v;
-  const value = rub / fxRates[tgt];
-  if(!isFinite(value)) return null;
-  return { value, cur:tgt, terms:[] };
-}
-
-/* Parse a line as a currency expression → {value,cur,terms,pending} or null.
-   Terms are (±amount currency); an optional "в|in|to CUR" (or a bare trailing
-   currency word) sets the target. Default target: RUB for a foreign source,
-   USD for a RUB source. */
-function evalCurrency(content){
-  const strict=evalCur(content);   // operator-aware path first (scalars + */÷ compose with amounts)
-  if(strict) return strict;
-  const s=content; const terms=[]; let target=null, sign=1, pend=null, expectTarget=false;
-  let i=0; const n=s.length;
-  while(i<n){
-    const c=s[i];
-    if(c===' '||c==='\t'||c===OSP||c===SENT){ i++; continue; }
-    const kw=s.slice(i).match(CUR_CONV_RE);
-    if(kw){ expectTarget=true; i+=kw[0].length; continue; }
-    if(c==='+'||c==='-'){ sign=(c==='-')?-1:1; i++; continue; }
-    const nm=s.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
-    if(nm && /\d/.test(nm[0])){ pend=parseNum(nm[0]); i+=nm[0].length; continue; }
-    const cw=matchCurAt(s,i);
-    if(cw){
-      if(expectTarget){ target=cw.code; expectTarget=false; }
-      else if(pend!==null){ terms.push({sign, amount:pend, cur:cw.code}); pend=null; sign=1; }
-      else target=cw.code;                              // lone currency word → target
-      i+=cw.len; continue;
-    }
-    i++;
-  }
-  if(!terms.length) return null;
-  // Rubles never auto-convert: a bare ruble amount ("500 руб") shows no
-  // conversion — it needs an explicit target ("500 руб to euro" / "500 rub to usd").
-  // Foreign amounts (USD/EUR) DO auto-convert to rubles when no target is given.
-  if(!target && terms.every(t=>t.cur==='RUB')) return null;
-  const tgt = target || 'RUB';
-  if(!fxReady()) return { value:null, cur:tgt, terms, pending:true };
-  let rub=0; for(const t of terms) rub += t.sign * t.amount * fxRates[t.cur];
-  return { value: rub/fxRates[tgt], cur:tgt, terms };
-}
-/* One-line human rate string for the hover popup, e.g. "USD → 78,50 ₽  ·  ЦБ РФ · 17.07.2025". */
-function fxRateLine(code){
-  if(code==='RUB' || !fxReady()) return fxReady()? '' : 'курс ЦБ РФ загружается…';
-  const per=fxRates[code];
-  const d=fxMeta.date ? fxMeta.date.split('-').reverse().join('.') : '';
-  return CUR_LABEL[code]+' → '+fmt(Math.round(per*100)/100)+' ₽   ·   ЦБ РФ'+(d?' · '+d:'');
-}
 
 function tokenizeMath(text, vars){
   const toks = [];
@@ -1092,6 +950,9 @@ function tokenizeMath(text, vars){
     // "/dd.mm" date-spotlight trigger -> skip entirely, never a division op
     const dl = dateTriggerLenAt(text, i);
     if(dl){ i+=dl; continue; }
+    // "/usd" | "/euro" | "/yuan" currency command -> skip, never a division op
+    const cc0 = curCmdAt(text, i);
+    if(cc0){ i+=cc0.len; continue; }
     // "()" round-marker -> skip entirely, never an empty group
     if(c==='(' && text[i+1]===')'){ i+=2; continue; }
     // number
@@ -1528,29 +1389,23 @@ function analyze(text){
       }
     }
 
-    // currency conversion: overrides the plain result on non-heading, non-assign
-    // lines that carry a currency amount (руб/USD/EUR). Its converted value is
-    // NOT fed into sum/avg (mixing units would be wrong).
-    let currency=null;
+    // currency slash-command: "/usd" | "/euro" | "/yuan" on a non-heading,
+    // non-assignment line shows the live rate ("1 ₽ = x <sym>") in the results
+    // column instead of any math result. Recomputed on every render, so an
+    // hourly rate refresh live-updates both new and past lines.
+    let rateCmd=null;
     if(cls.kind!=='super' && cls.kind!=='header' && !assignedName){
-      const curCode=stripLineComment(content);
-      const cur=evalCurrency(curCode);
-      if(cur){
-        currency=cur;
-        result = cur.pending ? null : cur.value;
-        // a trailing "()" rounds the converted amount too, just like a plain
-        // math result (the round marker was previously ignored for currency)
-        if(result!==null && hasRoundMarker(curCode)){ result=applyRoundMarker(result); cur.value=result; }
-      }
+      rateCmd = lineCurCmd(stripLineComment(content));
+      if(rateCmd) result=null;   // the rate display takes the results slot
     }
 
-    // feed aggregation (skip boundary/heading lines and currency lines)
-    if(result!==null && !currency && cls.kind!=='super' && cls.kind!=='header'){
+    // feed aggregation (skip boundary/heading lines and rate-command lines)
+    if(result!==null && !rateCmd && cls.kind!=='super' && cls.kind!=='header'){
       ctx.contig.push(result);
       ctx.prev=result;
     }
 
-    out.push({raw:line, cls, content, result, assignedName, calcRange, error, dateCount, currency, section:sec});
+    out.push({raw:line, cls, content, result, assignedName, calcRange, error, dateCount, rateCmd, section:sec});
   });
 
   return {lines:out, varsBySection, varDefLineBySection, scopesBySection};
@@ -1656,13 +1511,12 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
         else if(ch==='=' && prio[k]<P.op) paint(k,k+1,'op',P.op,{type:'op'});
       }
     }
-    // ---- currency words (only on a line that actually converts) — coloured and
-    //      hoverable so the ЦБ РФ rate shows on hover ----
-    if(item.currency){
-      let ci=bodyStart;
-      while(ci<len){
-        const cw=matchCurAt(scanText,ci);
-        if(cw && (cmtStart<0 || ci<cmtStart)){ paint(ci,ci+cw.len,'cur',P.cur,{type:'cur',code:cw.code}); ci+=cw.len; continue; }
+    // ---- currency slash-commands "/usd" "/euro" "/yuan": colour the token ----
+    {
+      let ci=bodyStart; const end=cmtStart<0?len:cmtStart;
+      while(ci<end){
+        const cc=curCmdAt(scanText,ci);
+        if(cc){ paint(ci,ci+cc.len,'cur',P.cur,{type:'op'}); ci+=cc.len; continue; }
         ci++;
       }
     }
@@ -2207,14 +2061,13 @@ function render(){
       const left=(it.cls.indent||0)*charW + 16;   // + padX
       hs+='<div class="cbox-hit" data-i="'+k+'" style="top:'+top+'px;left:'+left+'px"></div>';
     }
-    if(it.currency && (it.result!==null || it.currency.pending)){
-      // currency conversion pill: "7 850 \u20bd" (or "\u2026" while the rate is loading)
-      const cy=it.currency;
-      const disp = cy.pending ? '\u2026' : fmt(Math.round(it.result*100)/100)+' '+CUR_SYMBOL[cy.cur];
+    if(it.rateCmd){
+      // currency slash-command pill: "1 \u20bd = 0,0128 $" (or "\u2026" while the rate loads)
+      const rc=it.rateCmd, per=fxRates[rc.code], ready=per>0;
+      const disp = ready ? ('1 \u20bd = '+fmtRate(1/per)+' '+rc.sym) : '\u2026';
       const anim = resultsPainted && prevResultVals[k]!==undefined && prevResultVals[k]!==disp ? ' changed' : '';
       newResultVals[k]=disp;
-      const dv = cy.pending ? '' : ' data-v="'+esc(plain(Math.round(it.result*100)/100))+'"';
-      rs+='<div class="result-line'+(cy.pending?'':' has')+'" data-i="'+k+'"'+dv+' style="height:'+h+'px">'
+      rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px">'
         +'<span class="pill cur'+anim+'">'+esc(disp)+'</span></div>';
     }else if(it.result!==null || it.error){
       const disp = it.error ? '\u2047' : fmt(it.result);   // U+2047 = "??" glyph
@@ -3690,26 +3543,12 @@ function onStackMove(e){
     else showPillHover(hoverRow, pillRng.start, pillRng.end);
   }
   else hidePillHover();
-  // hovering a currency word → floating popup with the current ЦБ РФ rate
-  const meta=(hoverRow>=0 && model && model.meta[hoverRow]) ? model.meta[hoverRow][col] : null;
-  if(meta && meta.type==='cur' && meta.code!=='RUB') showFxTip(e.clientX, e.clientY, meta.code);
-  else hideFxTip();
   // Hovering a variable shows ONLY its oval pill — no whole-line tint at all.
   // The full-line "reference" highlight remains solely on result-pill hover
   // (onResultHover below).
   setRowFx();
 }
-function onStackLeave(){ hoverRow=-1; srcRow=-1; hidePillHover(); hideFxTip(); setRowFx(); }
-function showFxTip(x,y,code){
-  let t=document.getElementById('fx-tip');
-  if(!t){ t=document.createElement('div'); t.id='fx-tip'; t.className='fx-tip'; document.body.appendChild(t); }
-  t.textContent=fxRateLine(code);
-  t.style.display='block';
-  const pad=12, w=t.offsetWidth, h=t.offsetHeight;
-  t.style.left=Math.min(x+14, window.innerWidth-w-pad)+'px';
-  t.style.top=Math.max(pad, y-h-12)+'px';
-}
-function hideFxTip(){ const t=document.getElementById('fx-tip'); if(t) t.style.display='none'; }
+function onStackLeave(){ hoverRow=-1; srcRow=-1; hidePillHover(); setRowFx(); }
 
 /* Highlight the source line when hovering a result pill. */
 function onResultHover(e){
@@ -4857,7 +4696,7 @@ document.addEventListener('DOMContentLoaded', boot);
 window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluateLenient, tokenizeMath, normalizePasted, dateAt,
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
-  evalCurrency, matchCurAt, fxRateLine, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
+  curCmdAt, lineCurCmd, fmtRate, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
 
 })();
