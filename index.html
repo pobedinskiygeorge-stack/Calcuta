@@ -1341,6 +1341,52 @@ function classify(line){
    comment and must never define a variable or touch math in any way. */
 const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.+)$/u;
 
+/* Same as ASSIGN_RE but the right side may be EMPTY, so a bare "переменная ="
+   whose expression continues on the next line still registers as an
+   assignment head (ASSIGN_RE needs a non-empty RHS and would miss it). */
+const ASSIGN_HEAD_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.*)$/u;
+function assignHead(line){
+  const m=ASSIGN_HEAD_RE.exec(line);
+  if(!m) return null;
+  const name=m[1].trim().toLowerCase();
+  if(!name || /^\d/.test(name) || KEYWORDS.has(name)) return null;
+  return {name, roundMark:!!m[2], rhs:m[3]};
+}
+/* Multi-line variable assignment. After "имя =", the expression may continue
+   onto the following physical lines (single Enter). Each continuation line is
+   folded into the RHS as if it were one line, up until an EMPTY line (the "two
+   line breaks in a row" the user asked to stop the chain), a "//"/"#" heading,
+   a checkbox, or a new "y =" assignment. A line is folded only while the joined
+   expression is still "open" — the RHS so far ends on an operator, or the
+   continuation begins with one (or the head's own RHS is empty) — so an ordinary
+   independent calc line sitting right below an assignment is NOT swallowed.
+   Returns {heads:{idx->{name,roundMark,rhs,span}}, consumed:Set(idx)}. */
+const OPEN_END_RE   = /[-+*\/^(]$/;      // RHS still waiting for more:  … +   … *   … (
+const OPEN_START_RE = /^[-+*\/^%)]/;     // continuation opens with an operator
+function computeAssignments(lines){
+  const heads={}; const consumed=new Set();
+  for(let i=0;i<lines.length;i++){
+    if(consumed.has(i)) continue;
+    const h=assignHead(lines[i]);
+    if(!h) continue;
+    let rhs=stripLineComment(h.rhs).trim();
+    const span=[];
+    for(let j=i+1;j<lines.length;j++){
+      const ln=lines[j];
+      if(ln.trim()==='') break;                 // empty line → chain stops (two \n in a row)
+      if(classify(ln).kind!=='text') break;     // //, #, [ ] break the chain
+      if(assignHead(ln)) break;                  // a new "y =" starts its own assignment
+      const c=stripLineComment(ln).trim();
+      const open = rhs==='' || OPEN_END_RE.test(rhs) || OPEN_START_RE.test(c);
+      if(!open) break;                           // independent calc line below → leave it alone
+      rhs = rhs==='' ? c : rhs+' '+c;
+      span.push(j);
+    }
+    if(rhs!==''){ heads[i]={name:h.name, roundMark:h.roundMark, rhs, span}; for(const s of span) consumed.add(s); }
+  }
+  return {heads, consumed};
+}
+
 /* A "//" supertask line starts a brand-new variable-scope section (itself
    included); everything before the first "//" is section 0. Sections let
    the same variable name hold independent values under different "//"
@@ -1358,18 +1404,14 @@ function computeSections(lines){
 /* Collect variable-assignment names per section (mirrors the old whole-doc
    collectVars, just bucketed) so a name is only "variable-shaped" for the
    highlighter/tokenizer within the section that actually defines it. */
-function collectVarsBySection(lines, secOf){
+function collectVarsBySection(lines, secOf, heads){
   const bySec={};
-  lines.forEach((line, idx)=>{
-    const m=ASSIGN_RE.exec(line);
-    if(m){
-      const name=m[1].trim().toLowerCase();
-      if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
-        const s=secOf[idx];
-        (bySec[s] || (bySec[s]=new Set())).add(name);
-      }
-    }
-  });
+  // `heads` already holds every assignment name (single- and multi-line),
+  // so a bare "переменная =" that continues on the next line is registered too.
+  for(const idx in heads){
+    const s=secOf[+idx];
+    (bySec[s] || (bySec[s]=new Set())).add(heads[idx].name);
+  }
   return bySec;
 }
 
@@ -1397,7 +1439,8 @@ function applyRoundMarker(v){ return Math.ceil(v/10)*10; }
 function analyze(text){
   const lines=text.split('\n');
   const secOf=computeSections(lines);
-  const varsBySection=collectVarsBySection(lines, secOf);
+  const {heads, consumed}=computeAssignments(lines);
+  const varsBySection=collectVarsBySection(lines, secOf, heads);
   const scopesBySection={};
   const varDefLineBySection={};
   // `contig` = results of the unbroken run of lines directly above; a blank
@@ -1408,10 +1451,17 @@ function analyze(text){
   lines.forEach((line, idx)=>{
     const cls=classify(line);
     const sec=secOf[idx];
+    const content=line.slice(cls.markerLen);
+    // A line folded into a preceding multi-line assignment's RHS (an expression
+    // that kept going after "имя =" via single Enters) doesn't compute or
+    // aggregate on its own — it only renders, with its numbers still lit.
+    if(consumed.has(idx)){
+      out.push({raw:line, cls, content, result:null, assignedName:null, calcRange:null, error:false, dateCount:false, currency:null, section:sec, contLine:true});
+      return;
+    }
     const vars=varsBySection[sec] || (varsBySection[sec]=new Set());
     const scope=scopesBySection[sec] || (scopesBySection[sec]={});
     const varDefLine=varDefLineBySection[sec] || (varDefLineBySection[sec]={});
-    const content=line.slice(cls.markerLen);
     const isBlank=line.trim()==='';
     let result=null, assignedName=null, calcRange=null, error=false, dateCount=false;
 
@@ -1420,22 +1470,37 @@ function analyze(text){
     // run, so sum/avg/prev see straight through it.
     if(isBlank || cls.kind==='super'){ ctx.contig=[]; }
 
-    // assignment?
-    const am=ASSIGN_RE.exec(line);
-    if(am){
-      const name=am[1].trim().toLowerCase();
-      if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
-        const rhs=am[3];
-        const rhsCode=stripLineComment(rhs);   // "x = 121 440 #note" -> "x = 121 440"
-        const toks=tokenizeMath(rhsCode, vars);
-        const lr=evaluateLenient(toks, scope, ctx);
-        let v=lr.v;
-        if(v!==null && (am[2]||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
-        if(v!==null){ scope[name]=v; result=v; assignedName=name;
-          // rhs runs to end of line, so its offset within the line is exact
-          if(lr.range){ const off=line.length-rhs.length; calcRange=[lr.range[0]+off, lr.range[1]+off]; } }
-        else if(lr.err) error=true;
-        if(varDefLine[name]===undefined) varDefLine[name]=idx;
+    // assignment? (single-line, or multi-line with a folded RHS)
+    const head=heads[idx];
+    if(head && head.span.length>0){
+      // multi-line: "имя =" whose expression spans several physical lines.
+      // head.rhs is the already-joined, comment-stripped expression.
+      const name=head.name, rhsCode=head.rhs;
+      const toks=tokenizeMath(rhsCode, vars);
+      const lr=evaluateLenient(toks, scope, ctx);
+      let v=lr.v;
+      if(v!==null && (head.roundMark||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
+      if(v!==null){ scope[name]=v; result=v; assignedName=name;
+        const eq=line.lastIndexOf('='); if(eq>=0 && eq+1<line.length) calcRange=[eq+1, line.length]; }
+      else if(lr.err) error=true;
+      if(varDefLine[name]===undefined) varDefLine[name]=idx;
+    } else {
+      const am=ASSIGN_RE.exec(line);
+      if(am){
+        const name=am[1].trim().toLowerCase();
+        if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
+          const rhs=am[3];
+          const rhsCode=stripLineComment(rhs);   // "x = 121 440 #note" -> "x = 121 440"
+          const toks=tokenizeMath(rhsCode, vars);
+          const lr=evaluateLenient(toks, scope, ctx);
+          let v=lr.v;
+          if(v!==null && (am[2]||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
+          if(v!==null){ scope[name]=v; result=v; assignedName=name;
+            // rhs runs to end of line, so its offset within the line is exact
+            if(lr.range){ const off=line.length-rhs.length; calcRange=[lr.range[0]+off, lr.range[1]+off]; } }
+          else if(lr.err) error=true;
+          if(varDefLine[name]===undefined) varDefLine[name]=idx;
+        }
       }
     }
 
@@ -1492,7 +1557,7 @@ function esc(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt
 function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const {raw, cls} = item;
   const len=raw.length;
-  const hasResult = item.result!==null;   // this line takes part in a computation
+  const hasResult = item.result!==null || item.contLine;   // computes, or is folded into a multi-line assignment
   // When the lenient evaluator ignored part of the line (a standalone paren
   // group like "(1 992)"), only the participating span gets number/operator
   // colors; the ignored group stays plain text, numbr-style.
