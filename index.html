@@ -128,8 +128,18 @@ body{
   margin:0;background:var(--bg);color:var(--text);
   font-family:var(--font-ui);font-size:var(--fs);
   -webkit-font-smoothing:antialiased;overflow:hidden;
+  /* iOS: a long-press anywhere on the UI chrome otherwise fires native text
+     selection (blue handles) + the Copy·Find·Translate callout on top of our
+     own menus — most visibly when long-pressing a document row, where the
+     selection latched onto the pop-up menu's own label. Kill selection and the
+     callout globally; the real editable fields opt back in right below. */
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
 }
 ::selection{background:var(--sel);color:var(--sel-text)}
+/* Editable fields re-enable text selection (typing, caret, drag-select). The
+   editor (#input) keeps callout:none from its own rule; other fields (search,
+   tag, rename) get the normal paste callout back. */
+input,textarea{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
 button{font-family:inherit;color:inherit}
 
 #app{display:flex;height:100vh;width:100vw;position:relative}
