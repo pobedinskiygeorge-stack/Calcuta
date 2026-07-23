@@ -879,7 +879,7 @@ const KEYWORDS = new Set([
    ================================================================ */
 /* Currency slash-commands. Typing "/usd", "/euro" or "/yuan" (word-boundary
    aware, exactly like the "/tag" and "/dd.mm" triggers) shows the live ЦБ РФ
-   rate in the results column as "1 ₽ = x <sym>". Currency conversion of amounts
+   rate in the results column as "1 <sym> = x ₽". Currency conversion of amounts
    no longer exists — these commands are the whole currency feature. */
 const CUR_CMDS = [
   ['dollar','USD','$'],['usd','USD','$'],['доллар','USD','$'],
@@ -906,9 +906,6 @@ function lineCurCmd(text){
   for(let i=0;i<text.length;i++){ const c=curCmdAt(text,i); if(c) return {code:c.code, sym:c.sym}; }
   return null;
 }
-/* "1 ₽ = x $" — format the small per-ruble rate with ~4 significant figures. */
-function fmtRate(x){ return isFinite(x) ? Number(x.toPrecision(4)).toString().replace('.',',') : ''; }
-
 // FX: RUB per 1 unit of the currency (RUB itself = 1)
 let fxRates={ RUB:1, USD:0, EUR:0, CNY:0 };
 let fxMeta ={ date:'', fetchedAt:0, source:'ЦБ РФ', ok:false };
@@ -1390,7 +1387,7 @@ function analyze(text){
     }
 
     // currency slash-command: "/usd" | "/euro" | "/yuan" on a non-heading,
-    // non-assignment line shows the live rate ("1 ₽ = x <sym>") in the results
+    // non-assignment line shows the live rate ("1 <sym> = x ₽") in the results
     // column instead of any math result. Recomputed on every render, so an
     // hourly rate refresh live-updates both new and past lines.
     let rateCmd=null;
@@ -2062,9 +2059,9 @@ function render(){
       hs+='<div class="cbox-hit" data-i="'+k+'" style="top:'+top+'px;left:'+left+'px"></div>';
     }
     if(it.rateCmd){
-      // currency slash-command pill: "1 \u20bd = 0,0128 $" (or "\u2026" while the rate loads)
+      // currency slash-command pill: "1 $ = 78,4 \u20bd" (or "\u2026" while the rate loads)
       const rc=it.rateCmd, per=fxRates[rc.code], ready=per>0;
-      const disp = ready ? ('1 \u20bd = '+fmtRate(1/per)+' '+rc.sym) : '\u2026';
+      const disp = ready ? ('1 '+rc.sym+' = '+fmt(per)+' \u20bd') : '\u2026';
       const anim = resultsPainted && prevResultVals[k]!==undefined && prevResultVals[k]!==disp ? ' changed' : '';
       newResultVals[k]=disp;
       rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px">'
@@ -4696,7 +4693,7 @@ document.addEventListener('DOMContentLoaded', boot);
 window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluateLenient, tokenizeMath, normalizePasted, dateAt,
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
-  curCmdAt, lineCurCmd, fmtRate, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
+  curCmdAt, lineCurCmd, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
 
 })();
