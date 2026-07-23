@@ -939,6 +939,7 @@ function tokenizeCur(s){
     if(c===' '||c==='\t'||c===OSP||c===SENT){ i++; continue; }
     const kw=s.slice(i).match(CUR_CONV_RE);
     if(kw){ expectTarget=true; i+=kw[0].length; continue; }
+    if(c==='(' && s[i+1]===')'){ i+=2; continue; }   // "()" round-marker → skip (handled separately), never an empty group
     if('+-*/^()%'.includes(c)){ toks.push({t:c}); i++; continue; }
     const nm=s.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
     if(nm && /\d/.test(nm[0])){
@@ -1458,8 +1459,15 @@ function analyze(text){
     // NOT fed into sum/avg (mixing units would be wrong).
     let currency=null;
     if(cls.kind!=='super' && cls.kind!=='header' && !assignedName){
-      const cur=evalCurrency(stripLineComment(content));
-      if(cur){ currency=cur; result = cur.pending ? null : cur.value; }
+      const curCode=stripLineComment(content);
+      const cur=evalCurrency(curCode);
+      if(cur){
+        currency=cur;
+        result = cur.pending ? null : cur.value;
+        // a trailing "()" rounds the converted amount too, just like a plain
+        // math result (the round marker was previously ignored for currency)
+        if(result!==null && hasRoundMarker(curCode)){ result=applyRoundMarker(result); cur.value=result; }
+      }
     }
 
     // feed aggregation (skip boundary/heading lines and currency lines)
