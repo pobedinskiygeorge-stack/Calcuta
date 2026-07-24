@@ -336,8 +336,20 @@ button{font-family:inherit;color:inherit}
 /* sync status: a small cloud at the right of the top bar. saved = dim,
    saving = clay + pulse, offline = clay + strike badge. Laconic. */
 #sync-status{flex:0 0 auto;position:relative;display:grid;place-items:center;width:26px;height:26px;
-  color:var(--dim);transition:color .2s,opacity .3s}
+  color:var(--dim);transition:color .2s,opacity .3s;cursor:pointer;border-radius:7px}
+#sync-status:hover{background:var(--row-hover)}
 #sync-status.sync-hidden{opacity:0;pointer-events:none}
+/* hard-save cloud popover */
+.cloud-menu{width:238px;max-width:calc(100vw - 20px);padding:9px 11px 11px}
+.cloud-save-btn{width:100%;padding:9px 12px;border:0;border-radius:9px;background:var(--accent);
+  color:#fff;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:filter .15s}
+.cloud-save-btn:hover{filter:brightness(1.07)}
+.cloud-save-btn:disabled{opacity:.55;cursor:default}
+.cloud-hint{font-size:11px;color:var(--dim);line-height:1.4;padding:8px 2px 0}
+.cloud-done{display:none;align-items:center;gap:6px;color:var(--result);font-weight:600;
+  font-size:12.5px;padding:9px 2px 0}
+.cloud-done.show{display:flex}
+.cloud-done svg{flex:0 0 auto}
 #sync-status .sync-badge{position:absolute;right:1px;bottom:1px;opacity:0}
 #sync-status.sync-saving{color:var(--accent);animation:sync-pulse 1.1s ease-in-out infinite}
 #sync-status.sync-saved{color:var(--dim)}
@@ -711,10 +723,21 @@ button{font-family:inherit;color:inherit}
         </div>
       </div>
       <span class="spacer"></span>
-      <div id="sync-status" class="sync-hidden" title="" aria-live="polite">
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.5 19a4.5 4.5 0 01-.42-8.98A6 6 0 0117.7 9.02 4 4 0 0117.5 19h-11z"/></svg>
-        <svg class="sync-badge sync-badge-check" viewBox="0 0 24 24" width="9" height="9" aria-hidden="true"><path fill="currentColor" d="M9 16.2l-3.5-3.5L4 14.2 9 19.2 20 8.2l-1.5-1.5z"/></svg>
-        <svg class="sync-badge sync-badge-off" viewBox="0 0 24 24" width="10" height="10" aria-hidden="true"><path fill="currentColor" d="M3 4.3l1.3-1.3 16.7 16.7-1.3 1.3z"/></svg>
+      <div class="tb-menu-wrap">
+        <div id="sync-status" class="sync-hidden" title="Синхронизация" aria-live="polite" role="button" tabindex="0" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.5 19a4.5 4.5 0 01-.42-8.98A6 6 0 0117.7 9.02 4 4 0 0117.5 19h-11z"/></svg>
+          <svg class="sync-badge sync-badge-check" viewBox="0 0 24 24" width="9" height="9" aria-hidden="true"><path fill="currentColor" d="M9 16.2l-3.5-3.5L4 14.2 9 19.2 20 8.2l-1.5-1.5z"/></svg>
+          <svg class="sync-badge sync-badge-off" viewBox="0 0 24 24" width="10" height="10" aria-hidden="true"><path fill="currentColor" d="M3 4.3l1.3-1.3 16.7 16.7-1.3 1.3z"/></svg>
+        </div>
+        <div class="tb-menu cloud-menu" id="cloud-menu" role="menu" hidden>
+          <div class="bm-title">Синхронизация</div>
+          <button class="cloud-save-btn" id="cloud-save" type="button">Сохранить на всех устройствах</button>
+          <div class="cloud-hint">Перезапишет заметки на всех ваших устройствах этой версией — даже на выключенных, как только они выйдут в сеть.</div>
+          <div class="cloud-done" id="cloud-done" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M9 16.2l-3.5-3.5L4 14.2 9 19.2 20 8.2l-1.5-1.5z"/></svg>
+            <span>Сохранено на всех устройствах</span>
+          </div>
+        </div>
       </div>
     </div>
     <div id="findbar">
@@ -1816,7 +1839,7 @@ const input=$('input'), highlight=$('highlight'),
 const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text, name and
    line-number colors live per document. */
-let store={ docs:[], activeId:null, tags:[], tagsUpdated:0, deletedDocs:{}, deletedTags:{}, pinned:[] };
+let store={ docs:[], activeId:null, tags:[], tagsUpdated:0, deletedDocs:{}, deletedTags:{}, pinned:[], forceEpoch:0 };
 let prevResultVals={}, resultsPainted=false;   // for the result-pill fade animation
 let lastCopiedResult=null;   // {v, at}: last result copied from the column
 function doc(){ return store.docs.find(d=>d.id===store.activeId) || store.docs[0]; }
@@ -3165,8 +3188,8 @@ function addTag(){
    Only one is open at a time; a menu is anchored under its trigger and
    nudged left if it would overflow the right edge of the viewport. */
 let openMenuId=null;
-const MENU_IDS=['brand-menu','docfind-menu'];
-const MENU_BTNS={'brand-menu':'brand-btn','docfind-menu':'doc-find-btn'};
+const MENU_IDS=['brand-menu','docfind-menu','cloud-menu'];
+const MENU_BTNS={'brand-menu':'brand-btn','docfind-menu':'doc-find-btn','cloud-menu':'sync-status'};
 function closeMenus(){
   MENU_IDS.forEach(id=>{ const m=$(id); if(m) m.hidden=true; });
   Object.values(MENU_BTNS).forEach(bid=>{ const b=$(bid); if(b) b.setAttribute('aria-expanded','false'); });
@@ -3200,6 +3223,10 @@ function toggleMenu(id){
     // tap (see the loupe handler) - never on menu open, so the first tap on
     // a row always lands (no on-screen-keyboard reflow to eat it).
     $('docfind-bar').classList.toggle('open', !!docFindQuery.trim());
+  }
+  if(id==='cloud-menu'){
+    const d=$('cloud-done'); if(d) d.classList.remove('show');   // fresh each open
+    const b=$('cloud-save'); if(b) b.disabled=false;
   }
 }
 
@@ -4013,6 +4040,9 @@ function mergeStores(local, remote){
     tags: tags,
     tagsUpdated: Math.max(local.tagsUpdated||0, remote.tagsUpdated||0),
     deletedTags: tagTomb,
+    // Hard-save epoch is monotonic: whoever last pressed "save to all devices"
+    // wins, and the value only ever climbs so a stale merge can't undo it.
+    forceEpoch: Math.max(local.forceEpoch||0, remote.forceEpoch||0),
   };
   merged.updated=Date.now();
   return merged;
@@ -4104,6 +4134,26 @@ function adoptMerged(merged){
   return suppressed;
 }
 
+/* Wholesale adopt a hard-saved remote version — no merge, no editing
+   protection. Only device-local view prefs (active tab, pins, column width)
+   are kept; every synced field is replaced with the forced version. */
+function adoptForced(remote){
+  const next=remote;
+  next.activeId=store.activeId;
+  next.resultsWidth=store.resultsWidth;
+  next.pinned=store.pinned;
+  next.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; });
+  if(!next.tags) next.tags=[];
+  if(!next.deletedTags || typeof next.deletedTags!=='object') next.deletedTags={};
+  if(!next.docs.length) next.docs.push(makeTasksDoc());
+  if(!next.docs.some(d=>d.id===next.activeId)) next.activeId=next.docs[0].id;
+  store=next;
+  saveLocal();
+  applyResultsWidth(store.resultsWidth);
+  renderTags(); renderDocs();
+  loadActiveIntoEditor();
+}
+
 /* Listen to the cloud doc. The FIRST snapshot reconciles this device with the
    cloud (merge, adopt, and push back anything the cloud was missing); later
    snapshots are live updates from other devices. cloudReady gates uploads so
@@ -4138,6 +4188,15 @@ function subscribeCloud(){
     const remote=parseRemote(snap.data());
     if(!remote){ if(first){ first=false; cloudReady=true; } return; }
     observeStore(remote);   // advance the logical clock past everything the cloud has seen
+    // HARD SAVE from another device: a higher forceEpoch means "make every device
+    // exactly this version". Adopt it wholesale, discarding any local divergence
+    // (even mid-typing) — strict by design, the whole point of the button.
+    if((remote.forceEpoch||0) > (store.forceEpoch||0)){
+      adoptForced(remote);
+      lastSyncedPayload=syncPayload(remote);
+      if(first){ first=false; cloudReady=true; }
+      return;
+    }
     const merged=mergeStores(store, remote);
     const suppressed=adoptMerged(merged);
     if(suppressed) deferRemote(remote);              // re-merge once typing pauses
@@ -4183,6 +4242,38 @@ function pushCloud(){
   }, 500);
 }
 function cloudSave(){ everEdited=true; if(cloudReady) pushCloud(); }
+
+/* HARD SAVE — force THIS device's current version onto the cloud and every
+   other device (on or off). Bumps forceEpoch (monotonic) so remote devices
+   adopt it wholesale via the snapshot handler, then writes the whole store
+   immediately. Offline, the write enters Firestore's durable queue and lands
+   when connectivity returns, so shut-down devices still pick it up. */
+let hardSaveWait=null, hardSaveDoneTimer=null;
+function hardSave(){
+  if(!db||!currentUser||!cloudRef) return;
+  // Wait for the first reconciliation before clobbering (online only) so a
+  // fresh device can't overwrite the real cloud with un-synced stock content.
+  if(!cloudReady && navigator.onLine){
+    setSyncStatus('saving');
+    clearTimeout(hardSaveWait); hardSaveWait=setTimeout(hardSave, 300); return;
+  }
+  const btn=$('cloud-save'), done=$('cloud-done');
+  store.forceEpoch=Math.max(store.forceEpoch||0, Date.now())+1;   // strictly newer than anything seen
+  everEdited=true; persist();
+  clearTimeout(cloudSaveTimer);                                    // cancel any pending debounced push
+  if(btn) btn.disabled=true;
+  setSyncStatus('saving');
+  const sent=syncPayload(store);
+  cloudRef.set({ data: JSON.stringify(store), updated: Date.now() })
+    .then(()=>{
+      lastSyncedPayload=sent; syncError(null); setSyncStatus('saved');
+      if(btn) btn.disabled=false;
+      if(done) done.classList.add('show');
+      clearTimeout(hardSaveDoneTimer);
+      hardSaveDoneTimer=setTimeout(()=>{ if(done) done.classList.remove('show'); closeMenus(); }, 1900);
+    })
+    .catch(err=>{ if(btn) btn.disabled=false; syncError(err); });
+}
 /* Immediate push — no debounce. For moments when timers are about to freeze
    (phone backgrounds the tab / page is closing): the 300ms save and 500ms
    push timers never fire there, so an edit made just before switching apps
@@ -4481,6 +4572,9 @@ function boot(){
   // top-bar dropdown triggers (calcuta / documents-loupe)
   $('brand-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('brand-menu'); });
   $('doc-find-btn').addEventListener('click', e=>{ e.stopPropagation(); toggleMenu('docfind-menu'); });
+  // cloud icon → hard-save popover ("save this version to all devices")
+  $('sync-status').addEventListener('click', e=>{ if(!currentUser) return; e.stopPropagation(); toggleMenu('cloud-menu'); });
+  $('cloud-save').addEventListener('click', e=>{ e.stopPropagation(); hardSave(); });
   // right-click / long-press the active-doc slot → rename / delete it (the slot
   // only names an UNPINNED, non-stock doc; stock/pinned docs have their own tabs)
   $('doc-find-btn').addEventListener('contextmenu', e=>{
@@ -4630,7 +4724,7 @@ function boot(){
   // close any open dropdown on outside click / Escape
   document.addEventListener('click', e=>{
     // a click inside the doc context menu must not close the loupe under it
-    if(openMenuId && !e.target.closest('.tb-menu') && !e.target.closest('#brand-btn,#doc-find-btn') && !e.target.closest('#docmenu')) closeMenus();
+    if(openMenuId && !e.target.closest('.tb-menu') && !e.target.closest('#brand-btn,#doc-find-btn,#sync-status') && !e.target.closest('#docmenu')) closeMenus();
   });
   document.addEventListener('keydown', e=>{
     if(e.key!=='Escape') return;
