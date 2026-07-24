@@ -53,6 +53,7 @@
   --date:#e3b755;          /* dates dd.mm (yellow) */
   --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
   --num:#7ec8f5;           /* numbers in a computation (sky blue) */
+  --cbox:#7ec8f5;          /* empty checkbox marker "[ ]" (sky blue) */
   --cur:#d9b45a;           /* "/usd" "/euro" "/yuan" command (gold) */
   --op-work:#e8a24e;       /* working arithmetic signs (orange) */
   --label:#e8a24e;         /* "текст:" labels (orange, always) */
@@ -104,6 +105,7 @@
   --date:#b07d10;
   --date-spot:rgba(176,125,16,.14);
   --num:#2b7fc4;
+  --cbox:#2b7fc4;          /* empty checkbox marker "[ ]" */
   --cur:#b58024;          /* "/usd" "/euro" "/yuan" command */
   --op-work:#cc7519;
   --label:#cc7519;
@@ -475,7 +477,7 @@ button{font-family:inherit;color:inherit}
    underlined, but with no pill background — click to open the document */
 #highlight .doclink{color:var(--link);text-decoration:underline;text-underline-offset:2px}
 #highlight .checkmark{color:var(--result);font-weight:600}
-#highlight .cbox{color:var(--dim)}
+#highlight .cbox{color:var(--cbox);font-weight:600}
 .hl-line.checked{color:var(--checked-text)}
 .hl-line.checked .num,.hl-line.checked .var,.hl-line.checked .op,.hl-line.checked .opx,
 .hl-line.checked .date,.hl-line.checked .tag,.hl-line.checked .sub{
@@ -4337,7 +4339,7 @@ function exportStyleBlock(){
     .brk0{color:${c('--brk0')};font-weight:600} .brk1{color:${c('--brk1')};font-weight:600} .brk2{color:${c('--brk2')};font-weight:600}
     .date{color:${c('--date')};font-weight:500} .label{color:${c('--label')};font-weight:500}
     .quote{color:${c('--super')}} .super{color:${c('--super')}} .header{color:${c('--comment')}}
-    .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--dim')}}
+    .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--cbox')};font-weight:600}
     .varu{background:${c('--pill-hover-bg')};border-radius:5px;padding:0 2px}
     .super-pill{background:${c('--super-soft')};border-radius:5px;padding:0 3px}
     .doclink{color:${c('--super')};background:${c('--super-soft')};border-radius:5px;padding:0 2px}
