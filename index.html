@@ -1249,9 +1249,25 @@ function assignHead(line){
    expression is still "open" — the RHS so far ends on an operator, or the
    continuation begins with one (or the head's own RHS is empty) — so an ordinary
    independent calc line sitting right below an assignment is NOT swallowed.
+
+   Two different kinds of "open" are folded differently:
+   - the RHS trails off mid-expression (ends on an operator, or an unclosed
+     "(" from any earlier line) → it's genuinely ONE expression split across
+     lines by Enter, so the continuation is appended as plain text and normal
+     operator precedence still applies within it ("500 +\n200 * 2" is
+     500+(200*2), same as "500 + 200 * 2" on one line).
+   - the RHS so far is already a complete, balanced expression and the new
+     line simply opens with its own operator ("500 + 200\n-100\n/наценка") →
+     each such line is its OWN top-to-bottom step applied to the running
+     total, not a term in one flat expression - "-100" must subtract from the
+     already-computed 700, never bind to "200" first via precedence. The
+     running total is wrapped in "(...)" before appending so the existing
+     evaluator's normal precedence rules do the strict left-to-right chaining
+     for free, with no separate accumulator logic needed.
    Returns {heads:{idx->{name,roundMark,rhs,span}}, consumed:Set(idx)}. */
 const OPEN_END_RE   = /[-+*\/^(]$/;      // RHS still waiting for more:  … +   … *   … (
 const OPEN_START_RE = /^[-+*\/^%)]/;     // continuation opens with an operator
+function parenDepth(s){ let d=0; for(let k=0;k<s.length;k++){ if(s[k]==='(') d++; else if(s[k]===')') d--; } return d; }
 function computeAssignments(lines){
   const heads={}; const consumed=new Set();
   for(let i=0;i<lines.length;i++){
@@ -1266,9 +1282,10 @@ function computeAssignments(lines){
       if(classify(ln).kind!=='text') break;     // //, #, [ ] break the chain
       if(assignHead(ln)) break;                  // a new "y =" starts its own assignment
       const c=stripLineComment(ln).trim();
-      const open = rhs==='' || OPEN_END_RE.test(rhs) || OPEN_START_RE.test(c);
+      const trailing = rhs==='' || OPEN_END_RE.test(rhs) || parenDepth(rhs)>0;
+      const open = trailing || OPEN_START_RE.test(c);
       if(!open) break;                           // independent calc line below → leave it alone
-      rhs = rhs==='' ? c : rhs+' '+c;
+      rhs = rhs==='' ? c : trailing ? rhs+' '+c : '('+rhs+') '+c;
       span.push(j);
     }
     // registered even when rhs stayed empty (no continuation line took it) -
