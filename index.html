@@ -3643,7 +3643,27 @@ function onPaste(e){
   const normalized=normalizePasted(txt);
   document.execCommand('insertText',false,normalized);
 }
+/* Pasted text is normalized line-by-line, but any URL run within a line is
+   passed through untouched: normalizeNumberRun() below happily inserts a
+   grouping space into a bare digit run like a product id or a port number,
+   and urlLenAt() stops recognizing a link the instant it hits ANY whitespace
+   (NBSP included) - so reformatting numbers inside a pasted link silently
+   breaks it into unclickable fragments. */
 function normalizePasted(txt){
+  return txt.split('\n').map(line=>{
+    let out='', i=0;
+    while(i<line.length){
+      const ul=urlLenAt(line,i);
+      if(ul){ out+=line.substr(i,ul); i+=ul; continue; }
+      let j=i+1;
+      while(j<line.length && !urlLenAt(line,j)) j++;
+      out+=normalizeNumberRun(line.slice(i,j));
+      i=j;
+    }
+    return out;
+  }).join('\n');
+}
+function normalizeNumberRun(txt){
   // Convert loose numbers (1,234.56 / 1234.5 / 714285,71428571 / "1 234,56")
   // pasted from mail/spreadsheets/Word to app format so they're recognized as
   // real numbers and take part in math: the decimal separator (dot or comma)
