@@ -1228,12 +1228,12 @@ function classify(line){
    silently dropping the assignment and the name's highlighting with it.
    NB: "#" is deliberately NOT in the prefix group - a "#" line is a code
    comment and must never define a variable or touch math in any way. */
-const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.+)$/u;
-
-/* Same as ASSIGN_RE but the right side may be EMPTY, so a bare "переменная ="
-   whose expression continues on the next line still registers as an
-   assignment head (ASSIGN_RE needs a non-empty RHS and would miss it). */
-const ASSIGN_HEAD_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.*)$/u;
+/* The right side may be EMPTY: a bare "переменная =" with nothing typed yet
+   (or whose expression continues on the next line) still counts as a real
+   assignment - it's the "declared, value not entered yet" state, treated as
+   0 until a real expression is typed (see the empty-rhs branch in analyze()). */
+const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.*)$/u;
+const ASSIGN_HEAD_RE = ASSIGN_RE;
 function assignHead(line){
   const m=ASSIGN_HEAD_RE.exec(line);
   if(!m) return null;
@@ -1271,7 +1271,9 @@ function computeAssignments(lines){
       rhs = rhs==='' ? c : rhs+' '+c;
       span.push(j);
     }
-    if(rhs!==''){ heads[i]={name:h.name, roundMark:h.roundMark, rhs, span}; for(const s of span) consumed.add(s); }
+    // registered even when rhs stayed empty (no continuation line took it) -
+    // a bare "имя =" is still a real, zero-valued assignment (see analyze()).
+    heads[i]={name:h.name, roundMark:h.roundMark, rhs, span}; for(const s of span) consumed.add(s);
   }
   return {heads, consumed};
 }
@@ -1380,20 +1382,28 @@ function analyze(text){
         if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
           const rhs=am[3];
           const rhsCode=stripLineComment(rhs);   // "x = 121 440 #note" -> "x = 121 440"
-          const toks=tokenizeMath(rhsCode, vars);
-          const lr=evaluateLenient(toks, scope, ctx);
-          let v=lr.v;
-          if(v!==null && (am[2]||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
-          if(v!==null){ scope[name]=v; result=v; assignedName=name;
-            // rhs runs to end of line, so its offset within the line is exact
-            if(lr.range){ const off=line.length-rhs.length; calcRange=[lr.range[0]+off, lr.range[1]+off]; } }
-          else if(lr.err) error=true;
+          if(rhsCode.trim()===''){
+            // "имя =" with nothing typed after it yet: still a real
+            // assignment (green, pill/backspace rules apply everywhere it's
+            // used) with an implicit 0 - but nothing computed to show, so the
+            // results column for THIS line stays empty (no calcRange).
+            scope[name]=0; assignedName=name;
+          } else {
+            const toks=tokenizeMath(rhsCode, vars);
+            const lr=evaluateLenient(toks, scope, ctx);
+            let v=lr.v;
+            if(v!==null && (am[2]||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
+            if(v!==null){ scope[name]=v; result=v; assignedName=name;
+              // rhs runs to end of line, so its offset within the line is exact
+              if(lr.range){ const off=line.length-rhs.length; calcRange=[lr.range[0]+off, lr.range[1]+off]; } }
+            else if(lr.err) error=true;
+          }
           if(varDefLine[name]===undefined) varDefLine[name]=idx;
         }
       }
     }
 
-    if(result===null && cls.kind!=='super' && cls.kind!=='header'){
+    if(result===null && !assignedName && cls.kind!=='super' && cls.kind!=='header'){
       const contentCode=stripLineComment(content);
       const toks=tokenizeMath(contentCode, vars);
       const lr=evaluateLenient(toks, scope, ctx);
