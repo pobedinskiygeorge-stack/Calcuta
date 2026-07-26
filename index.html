@@ -58,9 +58,11 @@
   --op-work:#e8a24e;       /* working arithmetic signs (orange) */
   --label:#e8a24e;         /* "текст:" labels (orange, always) */
   --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
-  --brk0:#2fd4c6;          /* matched brackets, by nesting depth: turquoise → pink → yellow */
-  --brk1:#ff77c8;
-  --brk2:#f2d43d;
+  --brk0:var(--num);       /* matched brackets that participate in a calculation, by nesting
+                              depth — reuse the app's own hues so they read as one system:
+                              outer = number-blue, then variable-green, then operator-orange */
+  --brk1:var(--var);
+  --brk2:var(--op-work);
   --result:#8fc7a8;        /* right-column results */
   --checked-bg:rgba(101,158,120,.15);
   --checked-text:#79856f;
@@ -110,9 +112,9 @@
   --op-work:#cc7519;
   --label:#cc7519;
   --op:#8a8272;
-  --brk0:#0f9e93;          /* matched brackets, by nesting depth: turquoise → pink → yellow */
-  --brk1:#cf3f9b;
-  --brk2:#9a7d0a;
+  --brk0:var(--num);
+  --brk1:var(--var);
+  --brk2:var(--op-work);
   --result:#2f9666;
   --checked-bg:rgba(101,158,120,.16);
   --checked-text:#9a9488;
@@ -511,6 +513,13 @@ button{font-family:inherit;color:inherit}
 #pillhover{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none}
 .pill-hover-box{position:absolute;height:var(--lh);border-radius:7px;background:var(--pill-hover-bg)}
 
+/* box behind a bracket's matching partner, shown while the caret sits right
+   next to either one — reuses the "source line" reference tint (--row-src)
+   so it reads as the same "this corresponds to that" language, just scoped
+   to a single character instead of a whole line. */
+#brackethover{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none}
+.brk-match-box{position:absolute;height:var(--lh);border-radius:4px;background:var(--row-src)}
+
 #hotspots{position:absolute;top:0;left:0;width:100%;height:100%;z-index:4;pointer-events:none}
 .cbox-hit{
   position:absolute;width:3ch;height:var(--lh);cursor:pointer;pointer-events:auto;border-radius:4px;
@@ -753,6 +762,7 @@ button{font-family:inherit;color:inherit}
         <div id="searchlayer"></div>
         <div id="sellayer"></div>
         <div id="pillhover"></div>
+        <div id="brackethover"></div>
         <pre id="highlight" class="layer" aria-hidden="true"></pre>
         <textarea id="input" class="layer" spellcheck="false" autocomplete="off"
                   autocapitalize="off"></textarea>
@@ -1464,19 +1474,24 @@ function analyze(text){
    ================================================================ */
 function esc(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
-/* Pair up "(" and ")" within [start,end) and give each matched pair a nesting
-   depth, so the highlighter can tint corresponding brackets the same "rainbow"
-   colour (depth 0 = outermost). Returns index -> depth for matched brackets
-   only; unmatched ones are absent and stay muted. */
+/* Pair up "(" and ")" within [start,end), giving each matched pair a nesting
+   depth (so the highlighter can tint corresponding brackets the same colour,
+   depth 0 = outermost) and a partner index (so clicking/moving the caret onto
+   one bracket can locate and highlight the other). Returns matched brackets
+   only; unmatched ones are absent from both maps. */
 const BRK_N=3;   // number of cycling bracket colours (--brk0..--brk2)
-function bracketDepths(text, start, end){
-  const depth=new Map(); const stack=[];
+function bracketPairs(text, start, end){
+  const depth=new Map(), partner=new Map(); const stack=[];
   for(let k=start;k<end;k++){
     const c=text[k];
     if(c==='(') stack.push(k);
-    else if(c===')' && stack.length){ const o=stack.pop(); depth.set(o, stack.length); depth.set(k, stack.length); }
+    else if(c===')' && stack.length){
+      const o=stack.pop();
+      depth.set(o, stack.length); depth.set(k, stack.length);
+      partner.set(o, k); partner.set(k, o);
+    }
   }
-  return depth;
+  return {depth, partner};
 }
 
 function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
@@ -1534,19 +1549,25 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     }
     // ---- operators: working arithmetic signs green (only when computing);
     //      grouping/assignment ( ) = stay muted ----
-    // Matched brackets get a per-depth "rainbow" colour so corresponding pairs
-    // are easy to track; unmatched brackets and "=" stay muted. Only on "mathy"
-    // lines (a digit or arithmetic sign is present), so prose parentheticals
-    // stay plain — and it works while an expression is still being typed, before
-    // it computes (no result yet).
+    // A matched bracket pair gets a per-depth colour ONLY when it actually
+    // takes part in the line's math (both ends fall inside calcRange, the
+    // same span whose numbers turn blue) — a pair that merely brackets a word
+    // ("заметка (важно) 100 + 50") stays plain text, like the word inside it.
+    // Checked on "mathy" lines (a digit or arithmetic sign is present), so
+    // prose parentheticals never even get considered — and it still works
+    // while an expression is being typed, before it computes (no result yet):
+    // calcRange is null until a partial lenient match narrows it, and inCalc()
+    // treats null as "the whole line", so brackets stay lit while typing.
+    // Unmatched brackets and "=" stay muted/plain, not part of a coloured pair.
     const brkEnd = cmtStart<0 ? len : cmtStart;
     if(/[\d+\-*\/^%]/.test(scanText.slice(bodyStart, brkEnd))){
-      const brk=bracketDepths(scanText, bodyStart, brkEnd);
+      const {depth:brk, partner}=bracketPairs(scanText, bodyStart, brkEnd);
       for(let k=bodyStart;k<brkEnd;k++){
         const ch=scanText[k];
         if((ch==='('||ch===')') && prio[k]<P.op){
           const d=brk.get(k);
-          paint(k,k+1, d===undefined?'op':'brk'+(d%BRK_N), P.op, {type:'op'});
+          if(d!==undefined && inCalc(k) && inCalc(partner.get(k)))
+            paint(k,k+1, 'brk'+(d%BRK_N), P.op, {type:'brk', partner:partner.get(k)});
         }
       }
     }
@@ -1860,7 +1881,8 @@ const input=$('input'), highlight=$('highlight'),
       gutter=$('gutter'), results=$('results'), hotspots=$('hotspots'),
       stack=$('stack'), editor=$('editor'), ctxmenu=$('ctxmenu'),
       linemenu=$('linemenu'), docmenu=$('docmenu'), toast=$('toast'),
-      searchlayer=$('searchlayer'), sellayer=$('sellayer'), pillhover=$('pillhover'), caretlayer=$('caretlayer');
+      searchlayer=$('searchlayer'), sellayer=$('sellayer'), pillhover=$('pillhover'), caretlayer=$('caretlayer'),
+      brackethover=$('brackethover');
 
 const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text, name and
@@ -2140,6 +2162,7 @@ function render(){
   if(searchQuery){ computeMatches(); renderSearch(); }
   renderSelection();   // re-place the rounded selection overlay after layout
   renderCaret();        // re-place the custom block caret + empty-line ghost
+  updateBracketMatch(); // re-check the caret against the freshly rebuilt bracket map
 }
 
 /* ---------- persistence ---------- */
@@ -3563,6 +3586,39 @@ function showPillHover(row, start, end){
   pillhover.innerHTML=html;
 }
 function hidePillHover(){ if(pillhover.innerHTML) pillhover.innerHTML=''; }
+
+/* Matching-bracket highlight: when the caret sits right against one of a
+   coloured bracket pair (either side — the bracket just typed past, or the
+   one about to be typed over), light up its partner too. Only pairs that
+   already got a "brk0/1/2" colour (buildLineHTML's cmeta records their
+   partner index) are eligible — a bracket that's just plain text has none. */
+function showBracketMatch(row, a, b){
+  const rects=charRangeRects(row,a,a+1).concat(charRangeRects(row,b,b+1));
+  if(!rects.length){ hideBracketMatch(); return; }
+  const sb=stack.getBoundingClientRect();
+  let html='';
+  for(const r of rects){
+    const top=r.top - sb.top + stack.scrollTop;
+    const left=r.left - sb.left + stack.scrollLeft;
+    html+='<div class="brk-match-box" style="top:'+top+'px;left:'+left+'px;width:'+r.width+'px;height:'+r.height+'px"></div>';
+  }
+  brackethover.innerHTML=html;
+}
+function hideBracketMatch(){ if(brackethover.innerHTML) brackethover.innerHTML=''; }
+function updateBracketMatch(){
+  if(!model || document.activeElement!==input){ hideBracketMatch(); return; }
+  const s=input.selectionStart, e=input.selectionEnd;
+  if(s!==e){ hideBracketMatch(); return; }   // an active selection isn't "next to" one bracket
+  const {row,col}=offsetToLineCol(s);
+  const rowMeta=model.meta[row];
+  if(!rowMeta){ hideBracketMatch(); return; }
+  // the caret sits between chars col-1 and col; either side may be the bracket
+  const left=rowMeta[col-1], right=rowMeta[col];
+  const hit = (right && right.type==='brk') ? right : (left && left.type==='brk') ? left : null;
+  if(!hit || hit.partner==null){ hideBracketMatch(); return; }
+  const idx = hit===right ? col : col-1;
+  showBracketMatch(row, idx, hit.partner);
+}
 /* The definition (LHS) range of `name` within the section of line `row`:
    the "original" variable a usage points back to. null when the def line is
    gone or no longer an assignment of that name (mid-edit states). */
@@ -4537,9 +4593,11 @@ function boot(){
   document.addEventListener('selectionchange', selectionGutterSync);
   document.addEventListener('selectionchange', renderSelection);   // rounded selection overlay
   document.addEventListener('selectionchange', renderCaret);       // block caret + empty-line ghost
+  document.addEventListener('selectionchange', updateBracketMatch); // matching-bracket highlight
   input.addEventListener('blur', ()=>setTimeout(selectionGutterSync,0));
   input.addEventListener('blur', ()=>{ if(sellayer) sellayer.innerHTML=''; });   // drop the overlay when focus leaves
   input.addEventListener('blur', ()=>{ if(caretlayer) caretlayer.innerHTML=''; stopCaretWatch(); });
+  input.addEventListener('blur', ()=>{ if(brackethover) brackethover.innerHTML=''; });
   input.addEventListener('focus', startCaretWatch);
   if(document.activeElement===input) startCaretWatch();
   stack.addEventListener('mousemove', onStackMove);
