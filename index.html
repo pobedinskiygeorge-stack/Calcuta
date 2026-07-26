@@ -2947,15 +2947,16 @@ function transformDoubleplus(){
   const xxEnd = plusEnd ? null : /^(\s*)(\S.*)\s[хХxX]{2}$/.exec(line);
   const endM=plusEnd||xxEnd;
   if(endM){
-    // "хх" means DONE: it checks an existing box (never doubles the marker,
-    // which "[ ] дело хх" used to do) and creates an already-checked box on
-    // a plain line. "++" keeps creating an unchecked box; on a line that is
-    // already a checkbox it just consumes the typed marker.
+    // Both markers only CREATE a task, never complete one: "текст хх" turns
+    // into an UNCHECKED "[ ] текст" exactly like "текст ++". Marking a task
+    // done is exclusively a tap on the checkbox (toggleCheckbox) — typing must
+    // never flip that state, so on a line that is already a checkbox the typed
+    // marker is simply consumed and the existing state is preserved.
     const body=endM[2];
     const cb=/^\[([ xX])\]\s?(.*)$/.exec(body);
     const rebuilt = cb
-      ? endM[1]+'['+(xxEnd?'x':cb[1])+'] '+cb[2]
-      : endM[1]+'['+(xxEnd?'x':' ')+'] '+body;
+      ? endM[1]+'['+cb[1]+'] '+cb[2]
+      : endM[1]+'[ ] '+body;
     const before=val.slice(0,lineStart), after=val.slice(end);
     input.value=before+rebuilt+after;
     const delta=rebuilt.length-line.length;
