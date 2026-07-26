@@ -15,9 +15,12 @@
    a missed substitution degrades to the old fixed-key behaviour rather than
    breaking. Before this, the key was a hardcoded 'calcuta-shell-v1' that was
    never bumped — so a redeploy left the previous index.html and icons cached
-   indefinitely, and only the network-first navigation hid the staleness. */
-const BUILD = '__BUILD__';
-const CACHE = 'calcuta-shell-' + BUILD;
+   indefinitely, and only the network-first navigation hid the staleness.
+   Keep this ONE literal — do not build it by concatenation. The workflow
+   asserts the stamped name is present with `grep -q "calcuta-shell-$SHA"`,
+   and a name glued together at runtime never appears in the file, so that
+   check would fail the build even though the substitution worked. */
+const CACHE = 'calcuta-shell-__BUILD__';
 const SHELL = [
   './', './index.html', './manifest.webmanifest',
   './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png',
