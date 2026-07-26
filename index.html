@@ -43,34 +43,56 @@
   --text-strong:#f0f2f4;   /* subtasks (white) */
   --dim:#7c8086;           /* gutter, muted */
   --dim-2:#4a4d53;
-  --accent:#c96442;        /* Claude clay */
-  --accent-soft:rgba(201,100,66,.16);
-  --var:#5ecb7e;           /* variables (green, richer than the old sage) — top priority */
+  /* ---- The five base hues. These are the ONLY chromatic literals in the app;
+     every other colour token below is an alias of one of them, which is what
+     keeps the palette closed. Adding a sixth hue means adding it here. ---- */
+  --accent:#ff7b00;        /* Half-Life orange — accent, operators, labels, chrome */
+  --var:#5ecb7e;           /* the one green — variables, results, checkmarks */
+  --super:#b98cf5;         /* purple — "//" headings, quotes */
+  --num:#7ec8f5;           /* sky blue — numbers, links */
+  --date:#e3b755;          /* yellow — dates dd.mm, currency, search */
+
+  /* ---- Aliases: no hue of their own, so a base change propagates. ---- */
+  --op-work:var(--accent); /* working arithmetic signs */
+  --label:var(--accent);   /* "текст:" labels */
+  --cbox:var(--accent);    /* empty checkbox marker "[ ]" */
+  --result:var(--var);     /* right-column results, "[x]" checkmark */
+  --link:var(--num);       /* URL + !document pills */
+  --cur:var(--date);       /* "/usd" "/euro" "/yuan" command */
+  --brk0:var(--var);       /* matched brackets that participate in a calculation, by
+                              nesting depth — outermost green, then orange, then purple,
+                              cycling every BRK_N levels */
+  --brk1:var(--accent);
+  --brk2:var(--super);
+
+  /* ---- Soft washes derived from the base hues. ---- */
+  --accent-soft:rgba(255,123,0,.16);
   --pill-hover-bg:rgba(94,203,126,.18); /* oval bg behind a variable + usage pills */
-  --super:#b98cf5;         /* supertask // (purple) */
+  --super-soft:rgba(185,140,245,.14);   /* whole-row fill of a "//" heading */
+  --date-spot:rgba(227,183,85,.16);     /* whole-line tint for "/dd.mm" spotlight */
+  --link-soft:rgba(126,200,245,.14);    /* URL pill fill */
+  --search-mark:rgba(227,183,85,.30);
+  --search-mark-active:rgba(227,183,85,.62);
+  --checked-bg:rgba(94,203,126,.13);
+  --row-src:rgba(255,123,0,.13);
+
+  /* ---- Beyond the base five. ---- */
+  --sel:rgba(122,214,209,.24);  /* pale turquoise, Claude-Code style — translucent, so
+                                   every syntax colour still reads through it. This hue
+                                   is EXCLUSIVE to text selection: it must not appear on
+                                   any other element. */
+  --danger:#e08b7a;             /* pastel red — destructive actions and errors only */
+  --danger-soft:rgba(224,139,122,.16);
+
+  /* ---- Neutrals. ---- */
   --comment:#8f897c;       /* "#" comment lines: muted but readable gray */
-  --super-soft:rgba(185,140,245,.16); /* pill bg behind a // heading */
-  --date:#e3b755;          /* dates dd.mm (yellow) */
-  --date-spot:rgba(227,183,85,.16); /* whole-line tint for "/dd.mm" spotlight */
-  --num:#7ec8f5;           /* numbers in a computation (sky blue) */
-  --cbox:#7ec8f5;          /* empty checkbox marker "[ ]" (sky blue) */
-  --cur:#d9b45a;           /* "/usd" "/euro" "/yuan" command (gold) */
-  --op-work:#e8a24e;       /* working arithmetic signs (orange) */
-  --label:#e8a24e;         /* "текст:" labels (orange, always) */
-  --op:#8c8778;            /* grouping / assignment ( ) = (muted) */
-  --brk0:var(--num);       /* matched brackets that participate in a calculation, by nesting
-                              depth — reuse the app's own hues so they read as one system:
-                              outer = number-blue, then variable-green, then operator-orange */
-  --brk1:var(--var);
-  --brk2:var(--op-work);
-  --result:#8fc7a8;        /* right-column results */
-  --checked-bg:rgba(101,158,120,.15);
-  --checked-text:#79856f;
+  --op:#8c8778;            /* assignment "=" (muted) */
+  --checked-text:#79856f;  /* faded text of a completed task */
   --row-hover:rgba(255,255,255,.035);
-  --row-src:rgba(201,100,66,.14);
-  --sel:rgba(255,150,70,.30);   /* translucent enough to read the text through it */
-  --sel-text:#ffefe0;      /* forced text color under selection (any syntax color stays readable) */
-  --link:#6fb2f0;          /* URL pill */
+  --pill-bg:rgba(160,158,150,.22);        /* inline result pill inside the text */
+  --pill-col:rgba(160,158,150,.16);       /* results-column pill */
+  --pill-col-hover:rgba(160,158,150,.28);
+  --caret-glyph:#1a0e00;   /* the character under the block caret, forced for contrast */
   --scroll-thumb:#313439;
 
   --font-mono:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,'Liberation Mono',monospace;
@@ -97,32 +119,51 @@
   --text-strong:#26221c;
   --dim:#9c968a;
   --dim-2:#bcb6aa;
-  --accent:#c96442;
-  --accent-soft:rgba(201,100,66,.15);
+  /* ---- The same five base hues, darkened for paper. --accent is a deeper
+     Half-Life orange because pure #ff7b00 on #fdfbf7 sits near 2.4:1 contrast —
+     operators and labels would stop being readable at body size. ---- */
+  --accent:#d95f00;
   --var:#2da44e;
-  --pill-hover-bg:rgba(45,164,78,.15);
   --super:#7c4dd6;
-  --comment:#8e887b;
-  --super-soft:rgba(124,77,214,.13);
-  --date:#b07d10;
-  --date-spot:rgba(176,125,16,.14);
   --num:#2b7fc4;
-  --cbox:#2b7fc4;          /* empty checkbox marker "[ ]" */
-  --cur:#b58024;          /* "/usd" "/euro" "/yuan" command */
-  --op-work:#cc7519;
-  --label:#cc7519;
+  --date:#b07d10;
+
+  /* ---- Aliases (identical structure to the dark block). ---- */
+  --op-work:var(--accent);
+  --label:var(--accent);
+  --cbox:var(--accent);
+  --result:var(--var);
+  --link:var(--num);
+  --cur:var(--date);
+  --brk0:var(--var);
+  --brk1:var(--accent);
+  --brk2:var(--super);
+
+  /* ---- Soft washes. ---- */
+  --accent-soft:rgba(217,95,0,.14);
+  --pill-hover-bg:rgba(45,164,78,.15);
+  --super-soft:rgba(124,77,214,.12);
+  --date-spot:rgba(176,125,16,.14);
+  --link-soft:rgba(43,127,196,.12);
+  --search-mark:rgba(176,125,16,.28);
+  --search-mark-active:rgba(176,125,16,.55);
+  --checked-bg:rgba(45,164,78,.13);
+  --row-src:rgba(217,95,0,.12);
+
+  /* ---- Beyond the base five. ---- */
+  --sel:rgba(60,160,155,.20);   /* the same exclusive turquoise, tuned for paper */
+  --danger:#c05a45;
+  --danger-soft:rgba(192,90,69,.14);
+
+  /* ---- Neutrals. ---- */
+  --comment:#8e887b;
   --op:#8a8272;
-  --brk0:var(--num);
-  --brk1:var(--var);
-  --brk2:var(--op-work);
-  --result:#2f9666;
-  --checked-bg:rgba(101,158,120,.16);
   --checked-text:#9a9488;
   --row-hover:rgba(0,0,0,.045);
-  --row-src:rgba(201,100,66,.12);
-  --sel:rgba(235,140,45,.26);   /* translucent enough to read the text through it */
-  --sel-text:#2a1400;
-  --link:#2b7fc4;
+  --pill-bg:rgba(140,136,126,.20);
+  --pill-col:rgba(140,136,126,.15);
+  --pill-col-hover:rgba(140,136,126,.26);
+  --caret-glyph:#fff6ec;
   --scroll-thumb:#cfc9bd;
 }
 
@@ -145,7 +186,9 @@ body{
      callout globally; the real editable fields opt back in right below. */
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
 }
-::selection{background:var(--sel);color:var(--sel-text)}
+/* No forced text colour: the turquoise is translucent, so every syntax hue
+   still reads through it (a bracket keeps its depth colour while selected). */
+::selection{background:var(--sel)}
 /* Editable fields re-enable text selection (typing, caret, drag-select). The
    editor (#input) keeps callout:none from its own rule; other fields (search,
    tag, rename) get the normal paste callout back. */
@@ -254,7 +297,6 @@ button{font-family:inherit;color:inherit}
   flex:0 0 auto;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);
   cursor:pointer;padding:0;position:relative;overflow:hidden;
 }
-.swatch-btn input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .tag-list{display:flex;flex-direction:column;gap:6px}
 .tag-chip{
   display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;
@@ -262,8 +304,8 @@ button{font-family:inherit;color:inherit}
 }
 /* the colour dot doubles as a tap target to recolour an existing tag */
 .tag-chip .dot{width:15px;height:15px;border-radius:50%;flex:0 0 auto;position:relative;
-  cursor:pointer;border:1px solid rgba(128,128,128,.35)}
-.tag-chip .dot input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0}
+  cursor:pointer;border:1px solid var(--border);padding:0;-webkit-appearance:none;appearance:none}
+.tag-chip .dot.picking{box-shadow:0 0 0 2px var(--accent-soft)}
 .tag-chip .label{flex:1 1 auto;font-size:13px;font-family:var(--font-mono);color:var(--text);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tag-chip .del{border:none;background:none;color:var(--dim);cursor:pointer;font-size:15px;padding:0 2px}
@@ -345,9 +387,10 @@ button{font-family:inherit;color:inherit}
 #sync-status.sync-hidden{opacity:0;pointer-events:none}
 /* hard-save cloud popover */
 .cloud-menu{width:210px;max-width:calc(100vw - 20px);padding:8px}
-.cloud-save-btn{width:100%;padding:8px 12px;border:0;border-radius:8px;background:#2a2d34;
-  color:#fff;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s}
-.cloud-save-btn:hover{background:#343842}
+.cloud-save-btn{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;
+  background:var(--bg-editor);
+  color:var(--text-strong);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s}
+.cloud-save-btn:hover{background:var(--row-hover)}
 .cloud-save-btn:disabled{opacity:.55;cursor:default}
 .cloud-done{display:none;align-items:center;gap:6px;color:var(--result);font-weight:600;
   font-size:12.5px;padding:8px 2px 0}
@@ -428,6 +471,10 @@ button{font-family:inherit;color:inherit}
    (inset box-shadows) — renders with soft rounded corners, never a hard
    rectangle. Radius clips the inset box-shadows too. */
 .hl-line{min-height:var(--lh);width:100%;border-radius:9px}
+/* "//" supertask heading: the purple fills the WHOLE row, not just the text.
+   Declared before .src so the transient "source line" reference still wins on
+   a heading. Rounding and the same-tint row merging come from .hl-line above. */
+.hl-line.superrow{background:var(--super-soft)}
 .hl-line.src{background:var(--row-src)}
 .hl-line.checked{background:var(--checked-bg)}
 #highlight .num{color:var(--num)}
@@ -440,14 +487,6 @@ button{font-family:inherit;color:inherit}
 #highlight .label{color:var(--label);font-weight:500}
 #highlight .quote{color:var(--super)}
 #highlight .super{color:var(--super)}
-/* "//" supertask heading: purple label pill hugging the heading text. The
-   box-shadow spread fattens the pill without touching layout metrics, and
-   box-decoration-break keeps the fill on every wrapped fragment. */
-#highlight .super-pill{background:var(--super-soft);box-shadow:0 0 0 2px var(--super-soft);
-  border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone;
-  /* horizontal breathing room without shifting the monospace overlay: the padding
-     is cancelled by an equal negative margin so the glyph advance stays 0 */
-  padding:0 5px;margin:0 -5px}
 #highlight .header{color:var(--comment)}
 #highlight .cur{color:var(--cur);font-weight:600}   /* "/usd" "/euro" "/yuan" currency command */
 #highlight .var{color:var(--var);font-weight:500}
@@ -469,11 +508,11 @@ button{font-family:inherit;color:inherit}
    a visible gap from the pill edge (like every other token) instead of
    touching it. */
 #highlight .rpill{color:var(--text-strong);border-radius:7px;
-  background:rgba(160,158,150,.22);padding:0 4px;margin:0 -4px}
+  background:var(--pill-bg);padding:0 4px;margin:0 -4px}
 /* Link pill: soft blue fill + underline; opens on click via the #stack
    handler (this overlay is pointer-events:none, so the click passes through). */
 #highlight .link{color:var(--link);text-decoration:underline;text-underline-offset:2px;
-  border-radius:6px;background:rgba(111,178,240,.14);box-shadow:0 0 0 2px rgba(111,178,240,.14)}
+  border-radius:6px;background:var(--link-soft);box-shadow:0 0 0 2px var(--link-soft)}
 /* link to another Calcuta document ("!Название"): purple pill, click to open */
 /* link to another Calcuta document ("!Название"): same blue as a pasted URL,
    underlined, but with no pill background — click to open the document */
@@ -482,7 +521,8 @@ button{font-family:inherit;color:inherit}
 #highlight .cbox{color:var(--cbox);font-weight:600}
 .hl-line.checked{color:var(--checked-text)}
 .hl-line.checked .num,.hl-line.checked .var,.hl-line.checked .op,.hl-line.checked .opx,
-.hl-line.checked .date,.hl-line.checked .tag,.hl-line.checked .sub{
+.hl-line.checked .date,.hl-line.checked .tag,.hl-line.checked .sub,
+.hl-line.checked .brk0,.hl-line.checked .brk1,.hl-line.checked .brk2{
   color:var(--checked-text)!important;font-weight:400}
 .hl-line.checked .checkmark{color:var(--result)!important}
 
@@ -500,8 +540,8 @@ button{font-family:inherit;color:inherit}
 
 /* search highlight layer (yellow behind text) */
 #searchlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
-.search-mark{position:absolute;height:var(--lh);background:rgba(227,183,85,.30);border-radius:3px}
-.search-mark.active{background:rgba(227,183,85,.62);box-shadow:0 0 0 1px rgba(227,183,85,.85)}
+.search-mark{position:absolute;height:var(--lh);background:var(--search-mark);border-radius:3px}
+.search-mark.active{background:var(--search-mark-active);box-shadow:0 0 0 1px var(--date)}
 
 /* custom rounded text-selection overlay (behind the highlighted text) */
 #sellayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
@@ -535,7 +575,7 @@ button{font-family:inherit;color:inherit}
 .caret-glyph{
   position:absolute;height:var(--lh);line-height:var(--lh);
   font-family:var(--font-mono);font-size:var(--fs);letter-spacing:var(--ls);
-  color:#1a1006;white-space:pre;overflow:hidden;
+  color:var(--caret-glyph);white-space:pre;overflow:hidden;
 }
 .caret-ghost{
   position:absolute;height:var(--lh);line-height:var(--lh);
@@ -555,17 +595,17 @@ button{font-family:inherit;color:inherit}
 .result-line .pill{
   max-width:100%;box-sizing:border-box;
   border:1px solid transparent;border-radius:999px;padding:0 11px;height:22px;line-height:21px;
-  background:rgba(160,158,150,.16);color:var(--text-strong);font-size:13.5px;
+  background:var(--pill-col);color:var(--text-strong);font-size:13.5px;
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   cursor:pointer;transition:border-color .12s,background .12s,color .12s;
 }
-.result-line.has:hover .pill{background:rgba(160,158,150,.28);color:var(--text-strong)}
+.result-line.has:hover .pill{background:var(--pill-col-hover);color:var(--text-strong)}
 .result-line.copied .pill{background:var(--accent);color:#fff}
 /* currency conversion result: gold-tinted pill */
 .result-line .pill.cur{background:color-mix(in srgb, var(--cur) 20%, transparent);color:var(--cur)}
 .result-line.has:hover .pill.cur{background:color-mix(in srgb, var(--cur) 30%, transparent)}
 /* calc error: a muted "??" token, not copyable */
-.result-line .pill.err{background:rgba(201,100,66,.14);color:var(--accent);cursor:default}
+.result-line .pill.err{background:var(--danger-soft);color:var(--danger);cursor:default}
 /* gentle fade when a result value appears or changes (only the changed pill) */
 @keyframes pill-fade{from{opacity:.15}to{opacity:1}}
 .result-line .pill.changed{animation:pill-fade .28s ease}
@@ -577,10 +617,17 @@ button{font-family:inherit;color:inherit}
 }
 #ctxmenu.open{display:block}
 .ctx-title{font-size:11px;color:var(--dim);margin:0 2px 8px;letter-spacing:.4px}
-.swatches{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}
-.sw{width:22px;height:22px;border-radius:6px;cursor:pointer;border:1px solid rgba(255,255,255,.12)}
+/* One swatch grid, shared by the line-number menu and the tag colour picker —
+   both are limited to the app's base palette, so no colour outside it can enter
+   a document. */
+.swatches{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}
+.sw{width:22px;height:22px;border-radius:6px;cursor:pointer;border:1px solid var(--border)}
 .sw:hover{transform:scale(1.12)}
+.sw.sel{box-shadow:0 0 0 2px var(--bg-panel),0 0 0 3px var(--text-strong)}
 .sw.clear{display:grid;place-items:center;background:var(--bg-editor);color:var(--dim);font-size:13px}
+/* inline picker under the tag form; toggled by the swatch button / a chip dot */
+.tag-swatches{margin:0 0 12px;padding:8px;border:1px solid var(--border-soft);border-radius:8px}
+.tag-swatches[hidden]{display:none}
 
 /* line context menu (delete completed) */
 #linemenu,#docmenu{
@@ -593,7 +640,7 @@ button{font-family:inherit;color:inherit}
   padding:8px 10px;font-size:13px;color:var(--text);cursor:pointer;
 }
 .lm-item:hover{background:var(--bg-editor)}
-.lm-item.danger:hover{background:rgba(201,80,66,.16);color:#f0917a}
+.lm-item.danger:hover{background:var(--danger-soft);color:var(--danger)}
 
 /* confirmation modal */
 #confirm-overlay{
@@ -612,7 +659,7 @@ button{font-family:inherit;color:inherit}
   border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer;
 }
 .confirm-actions button:hover{border-color:var(--dim)}
-.confirm-actions button.danger{background:var(--accent);border-color:var(--accent);color:#fff}
+.confirm-actions button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
 .confirm-actions button.danger:hover{filter:brightness(1.08)}
 
 /* toast */
@@ -709,8 +756,9 @@ button{font-family:inherit;color:inherit}
           <div class="bm-title">Тэги</div>
           <div class="tag-form">
             <input id="tag-name" type="text" maxlength="24" autocomplete="off">
-            <button class="swatch-btn" id="tag-swatch"><input id="tag-color" type="color" value="#e0663f"></button>
+            <button class="swatch-btn" id="tag-swatch" type="button" title="Цвет тэга"></button>
           </div>
+          <div class="swatches tag-swatches" id="tag-swatches" hidden></div>
           <div class="tag-list" id="tag-list"></div>
         </div>
       </div>
@@ -1754,12 +1802,13 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
 
   // Empty lines keep their height via the fixed .hl-line height; no filler
   // char is added so overlay text stays 1:1 with the textarea.
-  // A "//" heading gets its purple label pill via a wrapper span (background
-  // only - zero effect on char metrics, so the caret stays aligned).
-  const html = (cls.kind==='super' && bodyHTML)
-    ? '<span class="super-pill">'+bodyHTML+'</span>'
-    : markerHTML + bodyHTML;
-  return {html, cmeta, markerLen, checked:(cls.kind==='checkbox'&&cls.checked), spotlightColor, dateSpotlight};
+  // A "//" heading's purple fill is a ROW background (.hl-line.superrow, set by
+  // render()) rather than an inline wrapper, so it spans the full width instead
+  // of hugging the text. Nothing is added around the glyphs at all, which also
+  // means there is no padding/negative-margin dance to keep the caret aligned.
+  const html = markerHTML + bodyHTML;
+  return {html, cmeta, markerLen, checked:(cls.kind==='checkbox'&&cls.checked),
+          superRow:(cls.kind==='super'), spotlightColor, dateSpotlight};
 }
 
 function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
@@ -2074,7 +2123,11 @@ function render(){
     // color itself stays on the line number, the text just gets a light tint
     const lcol=lineCols[k];
     if(lcol) tints.push('inset 0 0 0 999px '+hexToRgba(lcol, LINE_TINT_ALPHA));
-    builtRows[k]=built; tintRows[k]=tints; sigRows[k]=tints.join('|');
+    // The "//" heading fill is a plain background rather than an inset tint, but
+    // it participates in the same merging: two stacked headings should read as
+    // one purple block, not two pinched pills.
+    builtRows[k]=built; tintRows[k]=tints;
+    sigRows[k]=(built.superRow?'super|':'')+tints.join('|');
   }
   let hl='';
   for(let k=0;k<n;k++){
@@ -2090,7 +2143,8 @@ function render(){
       if(top!=='9px' || bot!=='9px') styles.push('border-radius:'+top+' '+top+' '+bot+' '+bot);
     }
     const style=styles.length? ' style="'+styles.join(';')+'"' : '';
-    hl+='<div class="hl-line'+(built.checked?' checked':'')+'" data-i="'+k+'"'+style+'>'+built.html+'</div>';
+    hl+='<div class="hl-line'+(built.checked?' checked':'')+(built.superRow?' superrow':'')
+       +'" data-i="'+k+'"'+style+'>'+built.html+'</div>';
   }
   highlight.innerHTML=hl;
 
@@ -3210,19 +3264,58 @@ function deleteLine(i){
   commitValue(newText, i===0?0:caret);
 }
 
-/* ---------- tags UI ---------- */
+/* ---------- tags UI ----------
+   Colour comes from the same base-palette swatch grid as the line numbers (a
+   free <input type="color"> would let any of 16M colours into the palette).
+   One inline grid serves both jobs: tagPickTarget is null while it is choosing
+   the colour for the tag about to be added, or a tag index while recolouring
+   an existing one. */
+// PALETTE is declared further down, so resolve the default lazily rather than
+// at load time (a top-level PALETTE[0] here would hit its temporal dead zone).
+let newTagColor=null;
+let tagPickTarget=null;
+function tagColor(){ return newTagColor || PALETTE[0]; }
+function paintTagSwatch(){ $('tag-swatch').style.background=tagColor(); }
+function closeTagPicker(){
+  tagPickTarget=null;
+  const box=$('tag-swatches'); if(box) box.hidden=true;
+  document.querySelectorAll('.tag-chip .dot.picking').forEach(d=>d.classList.remove('picking'));
+}
+function openTagPicker(target){
+  // tapping the same trigger again closes the grid
+  if(!$('tag-swatches').hidden && tagPickTarget===target){ closeTagPicker(); return; }
+  closeTagPicker();
+  tagPickTarget=target;
+  const cur = target===null ? tagColor() : (store.tags[target]||{}).color;
+  const box=$('tag-swatches');
+  box.innerHTML=swatchHTML(cur, false);
+  box.hidden=false;
+  if(target!==null){
+    const dot=document.querySelector('.tag-chip .dot[data-i="'+target+'"]');
+    if(dot) dot.classList.add('picking');
+  }
+}
+function pickTagColor(color){
+  if(!color) return;
+  if(tagPickTarget===null){ newTagColor=color; paintTagSwatch(); }
+  else{
+    const t=store.tags[tagPickTarget];
+    if(t){ t.color=color; t.updated=stamp(); store.tagsUpdated=t.updated; renderTags(); render(); scheduleSave(); }
+  }
+  closeTagPicker();
+}
 function renderTags(){
   const list=$('tag-list');
   if(!store.tags.length){ list.innerHTML='<p class="empty-hint">Добавь тэг — его текст будет подсвечен выбранным цветом (приоритет ниже переменных).</p>'; return; }
   list.innerHTML=store.tags.map((t,idx)=>
-    '<div class="tag-chip"><span class="dot" style="background:'+t.color+'" title="изменить цвет">'+
-    '<input type="color" class="tag-recolor" data-i="'+idx+'" value="'+t.color+'"></span>'+
+    '<div class="tag-chip">'+
+    '<button class="dot" data-i="'+idx+'" style="background:'+t.color+'" title="изменить цвет" type="button"></button>'+
     '<span class="label">'+esc(t.label)+'</span>'+
     '<button class="del" data-i="'+idx+'">×</button></div>').join('');
 }
 function addTag(){
   const name=$('tag-name').value.trim();
-  const color=$('tag-color').value;
+  const color=tagColor();
   if(!name) return;
   const key=name.toLowerCase();
   const now=stamp();
@@ -3230,6 +3323,7 @@ function addTag(){
   if(store.deletedTags) delete store.deletedTags[key];   // re-adding a previously deleted tag revives it
   store.tagsUpdated=now;
   $('tag-name').value='';
+  closeTagPicker();
   renderTags(); render(); scheduleSave();
 }
 
@@ -3244,6 +3338,7 @@ function closeMenus(){
   Object.values(MENU_BTNS).forEach(bid=>{ const b=$(bid); if(b) b.setAttribute('aria-expanded','false'); });
   openMenuId=null;
   closeDocMenu();
+  closeTagPicker();   // the tag swatch grid lives inside the calcuta dropdown
 }
 function clampMenu(m){
   m.style.left='0px';
@@ -3285,17 +3380,25 @@ function currentTheme(){ try{ return localStorage.getItem(THEME_KEY)||'dark'; }c
 function applyTheme(t){
   document.documentElement.classList.toggle('light', t==='light');
   document.querySelectorAll('#brand-menu .theme-opt').forEach(b=>b.classList.toggle('active', b.dataset.theme===t));
+  // keep the browser/PWA chrome in step — the <meta> ships with the dark value
+  const meta=document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim());
 }
 function setTheme(t){ try{ localStorage.setItem(THEME_KEY,t); }catch(e){} applyTheme(t); }
 
 /* ---------- line-number color context menu ---------- */
-const PALETTE=['#e0663f','#e3b755','#8fcf9c','#6fb2f0','#c79bf0','#e78ab0',
-               '#7fd4c4','#b7c96b','#d98f5a','#9aa0aa','#f0d071','#ffffff'];
-function buildSwatches(){
-  const wrap=$('ctx-swatches');
-  wrap.innerHTML=PALETTE.map(c=>'<div class="sw" data-c="'+c+'" style="background:'+c+'"></div>').join('')
-    +'<div class="sw clear" data-c="" title="сбросить">×</div>';
+/* The app's base palette — the ONLY colours a user can put into a document,
+   for both line numbers and tags. Everything here matches a CSS token, so the
+   picked colours read as part of the same system instead of drifting away from
+   it. (They are stored as literal hex, so an already-coloured line keeps its
+   colour across a theme switch — that was true before too.) */
+const PALETTE=['#ff7b00','#5ecb7e','#b98cf5','#7ec8f5','#e3b755',
+               '#e08b7a','#8f897c','#f0f2f4'];
+function swatchHTML(sel, withClear){
+  return PALETTE.map(c=>'<div class="sw'+(c===sel?' sel':'')+'" data-c="'+c+'" style="background:'+c+'"></div>').join('')
+    +(withClear?'<div class="sw clear" data-c="" title="сбросить">×</div>':'');
 }
+function buildSwatches(){ $('ctx-swatches').innerHTML=swatchHTML(null, true); }
 function openCtxMenu(x,y){
   ctxmenu.style.left=Math.min(x, window.innerWidth-200)+'px';
   ctxmenu.style.top=Math.min(y, window.innerHeight-160)+'px';
@@ -4444,9 +4547,10 @@ function exportStyleBlock(){
     .quote{color:${c('--super')}} .super{color:${c('--super')}} .header{color:${c('--comment')}}
     .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--cbox')};font-weight:600}
     .varu{background:${c('--pill-hover-bg')};border-radius:5px;padding:0 2px}
-    .super-pill{background:${c('--super-soft')};border-radius:5px;padding:0 3px}
-    .doclink{color:${c('--super')};background:${c('--super-soft')};border-radius:5px;padding:0 2px}
-    .rpill{background:rgba(160,158,150,.22);border-radius:5px;padding:0 3px}
+    td.lcell.superrow{background:${c('--super-soft')};border-radius:5px}
+    td.lcell.checked{background:${c('--checked-bg')};color:${c('--checked-text')};border-radius:5px}
+    .doclink{color:${c('--link')};text-decoration:underline}
+    .rpill{background:${c('--pill-bg')};border-radius:5px;padding:0 3px}
     .link{color:${c('--link')};text-decoration:underline}
   `;
 }
@@ -4458,7 +4562,10 @@ function buildExportHTML(){
     const left=kids[k].innerHTML || '&nbsp;';
     const it=model && model.data.lines[k];
     const res = it ? (it.error ? '⁇' : (it.result!=null ? esc(fmt(it.result)) : '')) : '';
-    rows += '<tr><td class="lcell">'+left+'</td><td class="rcell">'+res+'</td></tr>';
+    // row-level classes ("superrow", "checked") live on the .hl-line wrapper,
+    // whose innerHTML alone would drop them — carry them onto the cell
+    const rowCls=kids[k].className.replace('hl-line','').trim();
+    rows += '<tr><td class="lcell'+(rowCls?' '+rowCls:'')+'">'+left+'</td><td class="rcell">'+res+'</td></tr>';
   }
   return '<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+exportStyleBlock()+'</style></head>'
        + '<body><h2>'+esc(title)+'</h2><table>'+rows+'</table></body></html>';
@@ -4648,27 +4755,23 @@ function boot(){
 
   // add a tag by pressing Enter (the "+" button is gone)
   $('tag-name').addEventListener('keydown', e=>{ if(e.key==='Enter') addTag(); });
-  // the new-tag swatch mirrors the chosen colour
-  const swatchInput=$('tag-color');
-  const paintSwatch=()=>{ $('tag-swatch').style.background=swatchInput.value; };
-  paintSwatch();
-  swatchInput.addEventListener('input', paintSwatch);
+  // the new-tag swatch shows the pending colour and opens the base-palette grid
+  paintTagSwatch();
+  $('tag-swatch').addEventListener('click', e=>{ e.stopPropagation(); openTagPicker(null); });
+  $('tag-swatches').addEventListener('click', e=>{
+    const sw=e.target.closest('.sw'); if(!sw) return;
+    e.stopPropagation(); pickTagColor(sw.dataset.c);
+  });
   // tag list: delete via ×, recolour an existing tag via its colour dot
   $('tag-list').addEventListener('click', e=>{
+    const dot=e.target.closest('.dot');
+    if(dot){ e.stopPropagation(); openTagPicker(+dot.dataset.i); return; }
     const del=e.target.closest('.del'); if(!del) return;
     const i=+del.dataset.i, t=store.tags[i]; if(!t) return;
     const now=stamp();
     if(store.deletedTags) store.deletedTags[t.label.toLowerCase()]=now;   // tombstone so the delete syncs
-    store.tags.splice(i,1); store.tagsUpdated=now; renderTags(); render(); scheduleSave();
+    store.tags.splice(i,1); store.tagsUpdated=now; closeTagPicker(); renderTags(); render(); scheduleSave();
   });
-  $('tag-list').addEventListener('input', e=>{
-    const rec=e.target.closest('.tag-recolor'); if(!rec) return;
-    const i=+rec.dataset.i, t=store.tags[i]; if(!t) return;
-    t.color=rec.value; t.updated=stamp(); store.tagsUpdated=stamp();
-    const dot=rec.parentElement; if(dot) dot.style.background=t.color;   // live preview, don't rebuild (keeps the picker open)
-    render(); scheduleSave();
-  });
-  $('tag-list').addEventListener('change', e=>{ if(e.target.closest('.tag-recolor')) renderTags(); });
 
   // theme + tags live in the calcuta dropdown; check-marks were set pre-paint
   applyTheme(currentTheme());
