@@ -46,7 +46,9 @@
   /* ---- The five base hues. These are the ONLY chromatic literals in the app;
      every other colour token below is an alias of one of them, which is what
      keeps the palette closed. Adding a sixth hue means adding it here. ---- */
-  --accent:#ff7b00;        /* Half-Life orange — accent, operators, labels, chrome */
+  --accent:#e8802c;        /* Half-Life orange, held to the same 80% saturation as the
+                              rest of the base hues so it reads as one of them rather
+                              than shouting over them */
   --var:#5ecb7e;           /* the one green — variables, results, checkmarks */
   --super:#b98cf5;         /* purple — "//" headings, quotes */
   --num:#7ec8f5;           /* sky blue — numbers, links */
@@ -66,7 +68,7 @@
   --brk2:var(--super);
 
   /* ---- Soft washes derived from the base hues. ---- */
-  --accent-soft:rgba(255,123,0,.16);
+  --accent-soft:rgba(232,128,44,.16);
   --pill-hover-bg:rgba(94,203,126,.18); /* oval bg behind a variable + usage pills */
   --super-soft:rgba(185,140,245,.14);   /* whole-row fill of a "//" heading */
   --date-spot:rgba(227,183,85,.16);     /* whole-line tint for "/dd.mm" spotlight */
@@ -74,15 +76,16 @@
   --search-mark:rgba(227,183,85,.30);
   --search-mark-active:rgba(227,183,85,.62);
   --checked-bg:rgba(94,203,126,.13);
-  --row-src:rgba(255,123,0,.13);
+  --row-src:rgba(232,128,44,.13);
 
   /* ---- Beyond the base five. ---- */
   --sel:rgba(122,214,209,.24);  /* pale turquoise, Claude-Code style — translucent, so
                                    every syntax colour still reads through it. This hue
                                    is EXCLUSIVE to text selection: it must not appear on
                                    any other element. */
-  --danger:#e08b7a;             /* pastel red — destructive actions and errors only */
-  --danger-soft:rgba(224,139,122,.16);
+  --danger:#d57e6d;             /* muted red — destructive actions and errors only;
+                                   same 55% saturation as its light-theme twin */
+  --danger-soft:rgba(213,126,109,.16);
 
   /* ---- Neutrals. ---- */
   --comment:#8f897c;       /* "#" comment lines: muted but readable gray */
@@ -119,10 +122,10 @@
   --text-strong:#26221c;
   --dim:#9c968a;
   --dim-2:#bcb6aa;
-  /* ---- The same five base hues, darkened for paper. --accent is a deeper
-     Half-Life orange because pure #ff7b00 on #fdfbf7 sits near 2.4:1 contrast —
-     operators and labels would stop being readable at body size. ---- */
-  --accent:#d95f00;
+  /* ---- The same five base hues, darkened for paper. --accent has to go
+     deeper still: at the dark theme's lightness it sits near 2.4:1 on
+     #fdfbf7, and operators and labels stop being readable at body size. ---- */
+  --accent:#c16315;
   --var:#2da44e;
   --super:#7c4dd6;
   --num:#2b7fc4;
@@ -140,7 +143,7 @@
   --brk2:var(--super);
 
   /* ---- Soft washes. ---- */
-  --accent-soft:rgba(217,95,0,.14);
+  --accent-soft:rgba(193,99,21,.14);
   --pill-hover-bg:rgba(45,164,78,.15);
   --super-soft:rgba(124,77,214,.12);
   --date-spot:rgba(176,125,16,.14);
@@ -148,12 +151,12 @@
   --search-mark:rgba(176,125,16,.28);
   --search-mark-active:rgba(176,125,16,.55);
   --checked-bg:rgba(45,164,78,.13);
-  --row-src:rgba(217,95,0,.12);
+  --row-src:rgba(193,99,21,.12);
 
   /* ---- Beyond the base five. ---- */
   --sel:rgba(60,160,155,.20);   /* the same exclusive turquoise, tuned for paper */
-  --danger:#c05a45;
-  --danger-soft:rgba(192,90,69,.14);
+  --danger:#c85841;
+  --danger-soft:rgba(200,88,65,.14);
 
   /* ---- Neutrals. ---- */
   --comment:#8e887b;
@@ -3392,8 +3395,8 @@ function setTheme(t){ try{ localStorage.setItem(THEME_KEY,t); }catch(e){} applyT
    picked colours read as part of the same system instead of drifting away from
    it. (They are stored as literal hex, so an already-coloured line keeps its
    colour across a theme switch — that was true before too.) */
-const PALETTE=['#ff7b00','#5ecb7e','#b98cf5','#7ec8f5','#e3b755',
-               '#e08b7a','#8f897c','#f0f2f4'];
+const PALETTE=['#e8802c','#5ecb7e','#b98cf5','#7ec8f5','#e3b755',
+               '#d57e6d','#8f897c','#f0f2f4'];
 function swatchHTML(sel, withClear){
   return PALETTE.map(c=>'<div class="sw'+(c===sel?' sel':'')+'" data-c="'+c+'" style="background:'+c+'"></div>').join('')
     +(withClear?'<div class="sw clear" data-c="" title="сбросить">×</div>':'');
