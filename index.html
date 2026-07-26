@@ -2353,6 +2353,9 @@ function load(){
     }
     store.tags=Array.from(seen.values());
   }
+  // legacy tag/line colours: pull anything picked before the palette closed
+  // back onto a base colour (idempotent, see snapStoreColors)
+  snapStoreColors(store);
   // ensure the stock, undeletable documents exist (pinned to top, in order)
   if(!store.docs.some(d=>d.protected==='tasks')){
     const tasks=makeTasksDoc();
@@ -3398,6 +3401,79 @@ function setTheme(t){ try{ localStorage.setItem(THEME_KEY,t); }catch(e){} applyT
    colour across a theme switch — that was true before too.) */
 const PALETTE=['#e8802c','#5ecb7e','#b98cf5','#7ec8f5','#e3b755',
                '#f14065','#8f897c','#f0f2f4'];
+
+/* ---------- snapping legacy colours onto the base palette ----------
+   Stored tag and line colours predate the closed palette — the tag colour used
+   to be a free <input type="color">, so a document can carry any of 16M values.
+   snapStoreColors() pulls them back in, on load and on every remote snapshot.
+   It is idempotent, so each device converges on the same value on its own and
+   no timestamp has to be bumped (which would otherwise churn the sync).
+
+   The metric is CIEDE2000, not a plain Lab distance, and that choice decides
+   real cases: a vermilion like #d13a20 sits 30.2 from orange and 31.3 from red
+   by ΔE76 — a coin flip that lands on orange — while ΔE2000's hue/chroma
+   weighting puts it clearly with red (17.5 vs 20.9), which is what a colour
+   like that actually reads as. */
+function srgbToLab(hex){
+  const h=hex.replace('#','');
+  const [r,g,b]=[0,2,4].map(i=>parseInt(h.substr(i,2),16)/255)
+    .map(c=>c<=0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4));
+  const X=(r*.4124+g*.3576+b*.1805)/.95047,
+        Y= r*.2126+g*.7152+b*.0722,
+        Z=(r*.0193+g*.1192+b*.9505)/1.08883;
+  const f=t=>t>0.008856 ? Math.cbrt(t) : 7.787*t+16/116;
+  const fx=f(X), fy=f(Y), fz=f(Z);
+  return [116*fy-16, 500*(fx-fy), 200*(fy-fz)];
+}
+function deltaE2000(hexA, hexB){
+  const [L1,a1,b1]=srgbToLab(hexA), [L2,a2,b2]=srgbToLab(hexB);
+  const RAD=Math.PI/180, DEG=180/Math.PI, P25=Math.pow(25,7);
+  const pow7=v=>Math.pow(v,7);
+  const C1=Math.hypot(a1,b1), C2=Math.hypot(a2,b2), Cb=(C1+C2)/2;
+  const G=.5*(1-Math.sqrt(pow7(Cb)/(pow7(Cb)+P25) || 0));
+  const a1p=(1+G)*a1, a2p=(1+G)*a2;
+  const C1p=Math.hypot(a1p,b1), C2p=Math.hypot(a2p,b2);
+  const h1p=(Math.atan2(b1,a1p)*DEG+360)%360, h2p=(Math.atan2(b2,a2p)*DEG+360)%360;
+  const dLp=L2-L1, dCp=C2p-C1p;
+  let dhp=0;
+  if(C1p*C2p!==0){ dhp=h2p-h1p; if(dhp>180) dhp-=360; else if(dhp<-180) dhp+=360; }
+  const dHp=2*Math.sqrt(C1p*C2p)*Math.sin(dhp*RAD/2);
+  const Lbp=(L1+L2)/2, Cbp=(C1p+C2p)/2;
+  let hbp;
+  if(C1p*C2p===0) hbp=h1p+h2p;
+  else if(Math.abs(h1p-h2p)<=180) hbp=(h1p+h2p)/2;
+  else hbp=(h1p+h2p<360) ? (h1p+h2p+360)/2 : (h1p+h2p-360)/2;
+  const T=1-.17*Math.cos((hbp-30)*RAD)+.24*Math.cos(2*hbp*RAD)
+           +.32*Math.cos((3*hbp+6)*RAD)-.20*Math.cos((4*hbp-63)*RAD);
+  const Sl=1+(.015*Math.pow(Lbp-50,2))/Math.sqrt(20+Math.pow(Lbp-50,2));
+  const Sc=1+.045*Cbp, Sh=1+.015*Cbp*T;
+  const Rc=2*Math.sqrt(pow7(Cbp)/(pow7(Cbp)+P25) || 0);
+  const Rt=-Math.sin(2*(30*Math.exp(-Math.pow((hbp-275)/25,2)))*RAD)*Rc;
+  return Math.sqrt(Math.pow(dLp/Sl,2)+Math.pow(dCp/Sc,2)+Math.pow(dHp/Sh,2)
+                   +Rt*(dCp/Sc)*(dHp/Sh));
+}
+/* Nearest base-palette colour, or null when the input isn't a plain #rrggbb
+   (an unset/cleared colour must stay unset rather than snap to a swatch). */
+function nearestPaletteColor(hex){
+  if(typeof hex!=='string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return null;
+  const h=hex.toLowerCase();
+  if(PALETTE.indexOf(h)>=0) return h;
+  let best=null, bd=Infinity;
+  for(const c of PALETTE){ const d=deltaE2000(h,c); if(d<bd){ bd=d; best=c; } }
+  return best;
+}
+function snapStoreColors(s){
+  if(!s) return s;
+  if(Array.isArray(s.tags)) s.tags.forEach(t=>{
+    const n=nearestPaletteColor(t && t.color); if(n) t.color=n;
+  });
+  if(Array.isArray(s.docs)) s.docs.forEach(d=>{
+    const lc=d && d.lineColors; if(!lc) return;
+    for(const k in lc){ const n=nearestPaletteColor(lc[k]); if(n) lc[k]=n; }
+  });
+  return s;
+}
+
 function swatchHTML(sel, withClear){
   return PALETTE.map(c=>'<div class="sw'+(c===sel?' sel':'')+'" data-c="'+c+'" style="background:'+c+'"></div>').join('')
     +(withClear?'<div class="sw clear" data-c="" title="сбросить">×</div>':'');
@@ -4408,6 +4484,7 @@ function subscribeCloud(){
     }
     const remote=parseRemote(snap.data());
     if(!remote){ if(first){ first=false; cloudReady=true; } return; }
+    snapStoreColors(remote);   // a device that hasn't migrated yet can still send legacy colours
     observeStore(remote);   // advance the logical clock past everything the cloud has seen
     // HARD SAVE from another device: a higher forceEpoch means "make every device
     // exactly this version". Adopt it wholesale, discarding any local divergence
