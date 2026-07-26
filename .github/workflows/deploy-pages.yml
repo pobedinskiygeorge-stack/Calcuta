@@ -28,6 +28,8 @@ jobs:
           cp index.html site/
           cp manifest.webmanifest sw.js site/
           cp icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png site/
+          sed -i "s/__BUILD__/${GITHUB_SHA}/" site/sw.js
+          grep -q "calcuta-shell-${GITHUB_SHA}" site/sw.js
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
