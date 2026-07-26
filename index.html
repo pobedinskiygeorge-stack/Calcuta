@@ -83,9 +83,10 @@
                                    every syntax colour still reads through it. This hue
                                    is EXCLUSIVE to text selection: it must not appear on
                                    any other element. */
-  --danger:#d57e6d;             /* muted red — destructive actions and errors only;
-                                   same 55% saturation as its light-theme twin */
-  --danger-soft:rgba(213,126,109,.16);
+  --danger:#f14065;             /* the one red — destructive actions and errors only.
+                                   Deliberately identical in both themes: a single
+                                   fixed shade, not a per-theme pair. */
+  --danger-soft:rgba(241,64,101,.16);
 
   /* ---- Neutrals. ---- */
   --comment:#8f897c;       /* "#" comment lines: muted but readable gray */
@@ -155,8 +156,8 @@
 
   /* ---- Beyond the base five. ---- */
   --sel:rgba(60,160,155,.20);   /* the same exclusive turquoise, tuned for paper */
-  --danger:#c85841;
-  --danger-soft:rgba(200,88,65,.14);
+  --danger:#f14065;
+  --danger-soft:rgba(241,64,101,.14);
 
   /* ---- Neutrals. ---- */
   --comment:#8e887b;
@@ -3396,7 +3397,7 @@ function setTheme(t){ try{ localStorage.setItem(THEME_KEY,t); }catch(e){} applyT
    it. (They are stored as literal hex, so an already-coloured line keeps its
    colour across a theme switch — that was true before too.) */
 const PALETTE=['#e8802c','#5ecb7e','#b98cf5','#7ec8f5','#e3b755',
-               '#d57e6d','#8f897c','#f0f2f4'];
+               '#f14065','#8f897c','#f0f2f4'];
 function swatchHTML(sel, withClear){
   return PALETTE.map(c=>'<div class="sw'+(c===sel?' sel':'')+'" data-c="'+c+'" style="background:'+c+'"></div>').join('')
     +(withClear?'<div class="sw clear" data-c="" title="сбросить">×</div>':'');
