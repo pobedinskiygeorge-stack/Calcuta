@@ -8,11 +8,22 @@
      NOT intercepted at all, so real-time sync and sign-in behave exactly as before.
    The app's own Firestore offline persistence still handles data offline; this SW
    only makes the app itself (and its code) load without a network. */
-const CACHE = 'calcuta-shell-v1';
+/* __BUILD__ is replaced with the commit SHA by the "Prepare site" step of
+   .github/workflows/deploy-pages.yml. It only ever touches this file, never
+   index.html, so the app stays a single self-contained file that works when
+   opened straight from disk. The literal is a valid cache name on its own, so
+   a missed substitution degrades to the old fixed-key behaviour rather than
+   breaking. Before this, the key was a hardcoded 'calcuta-shell-v1' that was
+   never bumped — so a redeploy left the previous index.html and icons cached
+   indefinitely, and only the network-first navigation hid the staleness. */
+const BUILD = '__BUILD__';
+const CACHE = 'calcuta-shell-' + BUILD;
 const SHELL = [
   './', './index.html', './manifest.webmanifest',
   './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png',
 ];
+// How long a navigation waits for the network before falling back to cache.
+const NAV_TIMEOUT_MS = 2500;
 
 self.addEventListener('install', e=>{
   e.waitUntil(
@@ -40,8 +51,14 @@ function cacheable(url){
     return false;
   }catch(e){ return false; }
 }
+/* Only store responses we can actually verify. index.html now injects the
+   Firebase SDK with crossorigin="anonymous", and gstatic answers with
+   `access-control-allow-origin: *`, so those are ordinary CORS responses with
+   a meaningful res.ok. Previously they were opaque: status unreadable (a
+   truncated or error body would be cached and served back indefinitely) and
+   charged against origin quota with multi-megabyte padding. */
 function put(req,res){
-  if(res && (res.ok || res.type==='opaque')){
+  if(res && res.ok){
     const copy=res.clone(); caches.open(CACHE).then(c=>c.put(req,copy)).catch(()=>{});
   }
   return res;
@@ -52,10 +69,31 @@ self.addEventListener('fetch', e=>{
   if(req.method!=='GET') return;                         // writes/API POSTs: untouched
 
   if(req.mode==='navigate'){                             // opening the app
-    e.respondWith(
-      fetch(req).then(res=>put(req,res))
-        .catch(()=>caches.match(req).then(r=>r || caches.match('./index.html') || caches.match('./')))
-    );
+    /* Network-first, but with a deadline. The old version only reached for the
+       cache when fetch() *rejected*, so on lie-fi — a captive portal, a dead
+       VPN, a phone holding one bar — the launch hung for the browser's full
+       network timeout while a perfectly good copy sat in Cache Storage. That
+       was the worst cold-start in the app. Now the cache wins after 2.5 s and
+       the network response is still cached in the background, so the next
+       launch is current either way.
+       (The previous fallback chain also had a dead branch: in
+       `r || caches.match('./index.html') || caches.match('./')` the middle
+       operand is a Promise, hence always truthy, so `'./'` was unreachable.) */
+    e.respondWith((async ()=>{
+      const cachedP = caches.match(req)
+        .then(r=>r || caches.match('./index.html'))
+        .then(r=>r || caches.match('./'));
+      const netP = fetch(req).then(res=>put(req,res));
+      const TIMEOUT = Symbol('timeout'), FAILED = Symbol('failed');
+      const first = await Promise.race([
+        netP.catch(()=>FAILED),
+        new Promise(r=>setTimeout(()=>r(TIMEOUT), NAV_TIMEOUT_MS)),
+      ]);
+      if(first !== TIMEOUT && first !== FAILED) return first;
+      const cached = await cachedP;
+      if(cached){ e.waitUntil(netP.catch(()=>{})); return cached; }
+      return netP;                                       // nothing cached: keep waiting
+    })());
     return;
   }
 

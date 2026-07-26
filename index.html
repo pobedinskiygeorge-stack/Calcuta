@@ -20,11 +20,17 @@
 <!-- Register the service worker (offline + fast launch). Relative path so it
      works under a GitHub Pages project subpath; failures are non-fatal. -->
 <script>if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});}</script>
-<!-- Firebase (Google sign-in + Firestore sync) — loaded with `defer` so it
-     never blocks first paint; ready by DOMContentLoaded, when boot() wires it up. -->
-<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<!-- Firebase (Google sign-in + Firestore sync) is NOT loaded here. As three
+     `defer` tags it was ~512 KB that had to download, parse and execute before
+     DOMContentLoaded — which is what boot() waits for — so the editor could not
+     appear until the network had answered, even though every note was already
+     in localStorage. loadFirebase() now injects the same bundles after the
+     first render (see the [SYNC] section). These hints just warm the
+     connections so that later load is quick. -->
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
 <!-- ============================================================
      Calcuta — a code-editor-styled text editor with a live math
      engine, inspired by numbr.dev. Single self-contained file.
@@ -232,15 +238,6 @@ button{font-family:inherit;color:inherit}
   overflow-y:auto;padding:10px 12px 14px}
 .bm-sep{height:1px;background:var(--border-soft);margin:9px 2px}
 .bm-title{font-size:11px;color:var(--dim);padding:4px 8px 5px;letter-spacing:.3px}
-.bm-item{
-  display:flex;align-items:center;gap:8px;width:100%;text-align:left;
-  padding:7px 8px;border:0;border-radius:7px;background:none;color:var(--text);
-  font-size:13px;cursor:pointer;
-}
-.bm-item:hover{background:var(--bg-editor)}
-.bm-item .bm-check{width:14px;flex:0 0 auto;color:var(--accent);visibility:hidden}
-.bm-item.active .bm-check{visibility:visible}
-.bm-item .bm-ic{width:15px;flex:0 0 auto;opacity:.8}
 /* theme choice: both options on one row; the active one is an oval pill */
 .theme-row,.doc-row{display:flex;gap:6px;padding:3px 4px}
 .doc-opt{flex:0 0 auto;padding:6px 15px;border:0;border-radius:999px;background:none;
@@ -343,12 +340,6 @@ button{font-family:inherit;color:inherit}
   flex:0 0 auto;font-size:10.5px;background:var(--date);color:#22200f;border-radius:9px;
   padding:0 6px;line-height:16px;font-variant-numeric:tabular-nums;
 }
-.doc-item .doc-del{
-  flex:0 0 auto;border:0;background:none;color:var(--dim);cursor:pointer;font-size:15px;
-  padding:0 2px;opacity:0;transition:opacity .12s;
-}
-.doc-item:hover .doc-del{opacity:1}
-.doc-item .doc-del:hover{color:var(--accent)}
 
 /* ---------- Workspace ---------- */
 #workspace{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;background:var(--bg-editor);position:relative}
@@ -417,7 +408,6 @@ button{font-family:inherit;color:inherit}
 .ac-item .ac-ic{flex:0 0 auto;width:14px;color:var(--dim);font-size:12px}
 .ac-item.sel{background:var(--bg-editor)}
 .ac-item .ac-val{margin-left:auto;color:var(--dim);font-size:11.5px;font-variant-numeric:tabular-nums}
-.ac-empty{padding:6px 9px;font-size:12px;color:var(--dim)}
 
 /* editor grid — single vertical scroller; children grow to content height so
    the textarea and the highlight overlay scroll together (no caret desync) */
@@ -699,9 +689,16 @@ button{font-family:inherit;color:inherit}
   #findbar input{font-size:16px}
 }
 
-/* ---------- auth gate (Google sign-in, shown before the app is usable) ---------- */
-#authgate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+/* ---------- auth gate (Google sign-in) ----------
+   Hidden by default. It used to default to display:flex, so an opaque overlay
+   covered the app until Firebase Auth answered — even though load() had
+   already read localStorage and rendered the editor underneath it. A returning
+   user therefore waited on a network round trip to see notes that were sitting
+   right there. Now boot() adds .show only when there is genuinely nothing to
+   show (no prior session on this device and no local content). */
+#authgate{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;
   background:var(--bg);}
+#authgate.show{display:flex;}
 .authgate-card{width:min(340px,86vw);text-align:center;padding:36px 28px;border:1px solid var(--border);
   border-radius:14px;background:var(--bg-panel);}
 /* wordmark styled like the top-bar brand (mono, lowercase), scaled up for the
@@ -722,9 +719,6 @@ button{font-family:inherit;color:inherit}
 .shared-banner .sb-btn{flex:0 0 auto;background:var(--accent);color:#fff;border:0;border-radius:7px;
   padding:8px 14px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--font-ui)}
 .shared-banner .sb-btn:hover{filter:brightness(1.06)}
-#signout-btn{flex:0 0 auto;margin-left:auto;background:none;border:none;cursor:pointer;
-  font-size:14px;line-height:1;padding:5px 7px;border-radius:6px;color:var(--dim);opacity:.75}
-#signout-btn:hover{opacity:1;color:var(--text);background:var(--row-hover)}
 </style>
 
 <!-- ================= MARKUP ================= -->
@@ -864,6 +858,31 @@ const NBSP = ' ';           // narrow no-break space — visual thousands sepa
 const GROUP_RE = new RegExp(NBSP, 'g');
 const OSP  = ' ';      // U+00A0 no-break space — visual padding around operators
 function isFmtWS(ch){ return ch===NBSP || ch===OSP; }
+
+/* ---------- memoized word-boundary regexes ----------
+   The tag/variable painters build a lookbehind regex per tag and per variable
+   name — inside a loop that runs once per line. With 10 tags and 10 variables
+   on a 300-line note that was ~6000 RegExp compilations per keystroke, all for
+   the same handful of words, and all using \p{L} property escapes plus
+   lookbehind (V8's slow path). The key IS the word, so nothing ever needs
+   invalidating; the size cap only bounds a user with very many distinct
+   variable names. */
+const _reCache = new Map();
+function _re(key, build){
+  let r = _reCache.get(key);
+  if(!r){ if(_reCache.size > 400) _reCache.clear(); r = build(); _reCache.set(key, r); }
+  return r;
+}
+/* (?<![\p{L}\d_]) word (?![\p{L}\d_]) */
+function wordBoundRe(word, flags){
+  return _re('w\u0000'+flags+'\u0000'+word,
+    ()=>new RegExp('(?<![\\p{L}\\d_])'+escapeRe(word)+'(?![\\p{L}\\d_])', flags));
+}
+/* (?<![\p{L}\d_ OSP]) / OSP? label (?![\p{L}\d_]) — the "/tag" spotlight trigger */
+function slashTrigRe(label){
+  return _re('t\u0000'+label,
+    ()=>new RegExp('(?<![\\p{L}\\d_'+OSP+'])/'+OSP+'?'+escapeRe(label)+'(?![\\p{L}\\d_])','iu'));
+}
 const SENT = '\u2063';     // invisible marker: a copied result → inline pill
 function isCore(ch){ return !isFmtWS(ch) && ch!==SENT; }
 const TAG_SPOTLIGHT_ALPHA = 0.18;   // whole-line tint strength for an active "/tag" spotlight
@@ -908,9 +927,20 @@ function parseNum(raw){
    keeps dot-decimals ("3.14", "1234.56", "12.5") from being mistaken for
    dates — only a genuine "dd.mm" (e.g. "12.05") stays a date. ---- */
 const DATE_SRC = '(\\d{1,2})\\.(\\d{2})(?:\\.(\\d{2,4}))?(?!\\d)';
-const DATE_RE = new RegExp('\\b'+DATE_SRC);
 function isDateMatch(d,m){ d=+d;m=+m; return d>=1&&d<=31&&m>=1&&m<=12; }
-function dateAt(s){ const m=s.match(new RegExp('^'+DATE_SRC)); return (m && isDateMatch(m[1],m[2]))?m:null; }
+/* Sticky twin of DATE_SRC. dateAt() used to compile a fresh RegExp on every
+   call AND be handed a fresh `s.slice(i)` — and it is called once per document
+   character by five separate scanners, so that was the single hottest line in
+   the file. dateAtIdx() anchors at an index instead: no allocation either side.
+   dateAt(s) is kept as the offset-0 form for the __calcuta seam and callers
+   that genuinely hold a standalone string. */
+const DATE_AT_RE = new RegExp(DATE_SRC, 'y');
+function dateAtIdx(s, i){
+  DATE_AT_RE.lastIndex = i;
+  const m = DATE_AT_RE.exec(s);
+  return (m && isDateMatch(m[1], m[2])) ? m : null;
+}
+function dateAt(s){ return dateAtIdx(s, 0); }
 function normYear(y){ y=+y; return y<100 ? 2000+y : y; }
 /* A whole-line date range "21.08 - 25.08" -> number of days between them (4).
    Optional years; without years, an end earlier than the start wraps to next
@@ -939,6 +969,12 @@ function dateRangeDays(s){
    padding ("100 + 200") can never glue numbers together.
    Alt 2: plain / NBSP-run / suffixed ("2500000", "500k", "12,5"). ---- */
 const NUM_RE = /\d{1,3}(?:[ \u00a0\u2007\u2008\u2009\u200a\u202f\u205f]\d{3})+(?:[.,]\d+)?|\d[\d\u202f]*(?:[.,]\d+)?(?:[kKM])?/;
+// Sticky twins of NUM_RE, anchored at an index instead of at the start of a
+// freshly allocated tail string. The three call sites below sit inside
+// per-character loops, where `new RegExp(...)` + `slice(i)` on every character
+// was costing more than the matching itself.
+const NUM_AT_RE = new RegExp('(?:'+NUM_RE.source+')', 'y');
+const SIGNED_NUM_AT_RE = new RegExp('-?(?:'+NUM_RE.source+')', 'y');
 
 /* ================================================================
    Tokenizer for math evaluation.
@@ -997,8 +1033,21 @@ function loadFxCache(){
   try{ const c=JSON.parse(localStorage.getItem('calcuta.fx')||'null');
     if(c && c.rates && c.rates.USD){ fxRates=c.rates; fxMeta=c.meta||fxMeta; } }catch(e){}
 }
+/* The ЦБ РФ fixing changes once per business day, and most documents never
+   mention a currency at all — yet this used to fire on every launch and again
+   every hour, with {cache:'no-store'} defeating the HTTP cache each time.
+   maybeRefreshFx() is called from render() instead: it goes to the network
+   only when a rate command is actually on screen and the cache has aged out. */
+const FX_MAX_AGE = 6*3600*1000;
+let fxFetching=false;
+function maybeRefreshFx(needed){
+  if(!needed || fxFetching) return;
+  if(fxMeta.ok && (Date.now()-fxMeta.fetchedAt) < FX_MAX_AGE) return;
+  fetchFx();
+}
 function fetchFx(){
-  fetch('https://www.cbr-xml-daily.ru/daily_json.js', {cache:'no-store'})
+  fxFetching=true;
+  fetch('https://www.cbr-xml-daily.ru/daily_json.js')
     .then(r=>r.ok?r.json():null)
     .then(d=>{
       if(!d || !d.Valute || !d.Valute.USD || !d.Valute.EUR) return;
@@ -1007,7 +1056,7 @@ function fetchFx(){
       fxMeta={ date:(d.Date||'').slice(0,10), fetchedAt:Date.now(), source:'ЦБ РФ', ok:true };
       try{ localStorage.setItem('calcuta.fx', JSON.stringify({rates:fxRates, meta:fxMeta})); }catch(e){}
       if(typeof render==='function' && typeof input!=='undefined') render();
-    }).catch(()=>{});
+    }).catch(()=>{}).then(()=>{ fxFetching=false; });
 }
 
 
@@ -1023,7 +1072,7 @@ function tokenizeMath(text, vars){
     const ul = urlLenAt(text, i);
     if(ul){ i+=ul; continue; }
     // date -> skip (treated as context for math)
-    const dm = dateAt(text.slice(i));
+    const dm = dateAtIdx(text, i);
     if(dm){ i+=dm[0].length; continue; }
     // "/tagname" spotlight trigger -> skip entirely, never a division op
     const tl = tagTriggerLenAt(text, i);
@@ -1037,7 +1086,8 @@ function tokenizeMath(text, vars){
     // "()" round-marker -> skip entirely, never an empty group
     if(c==='(' && text[i+1]===')'){ i+=2; continue; }
     // number
-    const nm = text.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
+    NUM_AT_RE.lastIndex = i;
+    const nm = NUM_AT_RE.exec(text);
     if(nm && /\d/.test(nm[0])){ toks.push({t:'num',v:parseNum(nm[0]),s:i,e:i+nm[0].length}); i+=nm[0].length; continue; }
     // operators & parens
     if('+-*/^()'.includes(c)){ toks.push({t:c,s:i,e:i+1}); i++; continue; }
@@ -1134,7 +1184,7 @@ function dateTriggerLenAt(text, i){
   const before = text[i-1]||' ';
   if(/[\p{L}\d_]/u.test(before) || before===OSP) return 0; // must start at a real word boundary
   const skipOSP = text[i+1]===OSP ? 1 : 0;
-  const dm = dateAt(text.slice(i+1+skipOSP));
+  const dm = dateAtIdx(text, i+1+skipOSP);
   if(dm) return 1+skipOSP+dm[0].length;
   return 0;
 }
@@ -1295,9 +1345,8 @@ function classify(line){
    assignment - it's the "declared, value not entered yet" state, treated as
    0 until a real expression is typed (see the empty-rhs branch in analyze()). */
 const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.*)$/u;
-const ASSIGN_HEAD_RE = ASSIGN_RE;
 function assignHead(line){
-  const m=ASSIGN_HEAD_RE.exec(line);
+  const m=ASSIGN_RE.exec(line);
   if(!m) return null;
   const name=m[1].trim().toLowerCase();
   if(!name || /^\d/.test(name) || KEYWORDS.has(name)) return null;
@@ -1590,9 +1639,10 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     while(i<len){
       const ul=urlLenAt(scanText,i);
       if(ul){ i+=ul; continue; }   // digits/dots inside a URL aren't numbers or dates
-      const dm=dateAt(scanText.slice(i));
+      const dm=dateAtIdx(scanText, i);
       if(dm){ paint(i,i+dm[0].length,'date',P.date,{type:'date'}); i+=dm[0].length; continue; }
-      const nm=scanText.slice(i).match(new RegExp('^(?:'+NUM_RE.source+')'));
+      NUM_AT_RE.lastIndex=i;
+      const nm=NUM_AT_RE.exec(scanText);
       if(nm && /\d/.test(nm[0]) && !/[\p{L}_]/u.test(scanText[i-1]||' ')){
         if(hasResult && inCalc(i)) paint(i,i+nm[0].length,'num',P.num,{type:'num'});
         i+=nm[0].length; continue;
@@ -1690,8 +1740,9 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   if(cls.kind!=='header')
   for(const tag of tags){
     if(!tag.label) continue;
-    const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','giu');
+    const re=wordBoundRe(tag.label,'giu');
     let mt;
+    re.lastIndex=0;   // shared, cached object: never inherit a previous scan's position
     while((mt=re.exec(raw))){
       paint(mt.index, mt.index+mt[0].length, 'tag', P.tag, {type:'tag'}, tag.color);
       if(mt.index===re.lastIndex) re.lastIndex++;
@@ -1709,9 +1760,9 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
       if(!activeTags.has(tag.label.toLowerCase())) continue;
       // The line that HOLDS the "/tag" trigger (the search initiator you typed)
       // is deliberately NOT tinted — only the other lines carrying the tag are.
-      const trigRe=new RegExp('(?<![\\p{L}\\d_'+OSP+'])/'+OSP+'?'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','iu');
+      const trigRe=slashTrigRe(tag.label);
       if(trigRe.test(raw)) continue;
-      const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','iu');
+      const re=wordBoundRe(tag.label,'iu');
       if(re.test(cmtStart<0?raw:raw.slice(0,cmtStart))){ spotlightColor=tag.color; break; }
     }
   }
@@ -1738,8 +1789,9 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     const names=[...vars].sort((a,b)=>b.length-a.length);
     const takenV=[];   // longer names win; a shorter name inside one is skipped
     for(const name of names){
-      const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(name)+'(?![\\p{L}\\d_])','giu');
+      const re=wordBoundRe(name,'giu');
       let mt;
+      re.lastIndex=0;   // shared, cached object: never inherit a previous scan's position
       while((mt=re.exec(raw))){
         const s=mt.index, e=mt.index+mt[0].length;
         if(!takenV.some(([ts,te])=>s<te&&e>ts)){
@@ -1773,7 +1825,8 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   //      it (with an optional leading minus) in an inline oval pill. ----
   for(let s=bodyStart;s<len;s++){
     if(raw[s]===SENT){
-      const m=raw.slice(s+1).match(new RegExp('^-?(?:'+NUM_RE.source+')'));
+      SIGNED_NUM_AT_RE.lastIndex=s+1;
+      const m=SIGNED_NUM_AT_RE.exec(raw);
       if(m){ for(let j=s+1;j<s+1+m[0].length;j++) pill[j]=true; }
     }
   }
@@ -1875,7 +1928,7 @@ function activeSpotlightTags(text, tags){
   const active=new Set();
   for(const tag of tags){
     if(!tag.label) continue;
-    const re=new RegExp('(?<![\\p{L}\\d_'+OSP+'])/'+OSP+'?'+escapeRe(tag.label)+'(?![\\p{L}\\d_])','iu');
+    const re=slashTrigRe(tag.label);
     if(re.test(text)) active.add(tag.label.toLowerCase());
   }
   return active;
@@ -1910,7 +1963,7 @@ function activeSpotlightDates(text){
 function lineHasBareDate(raw, activeDates){
   let i=0; const len=raw.length;
   while(i<len){
-    const dm=dateAt(raw.slice(i));
+    const dm=dateAtIdx(raw, i);
     if(dm){
       const isTrigger = raw[i-1]==='/' || (raw[i-1]===OSP && raw[i-2]==='/');
       if(activeDates.has(dm[0]) && !isTrigger) return true;
@@ -1952,6 +2005,29 @@ let LH=24;                  // px per visual row — kept in sync with --lh by m
 let charsPerLine=1;         // how many chars fit before a line wraps
 let lineRowTop=[], lineRowCount=[];   // per-source-line cumulative offset / row span (in LH units)
 
+/* ---------- render reconciliation state ----------
+   render() used to replace highlight/gutter/hotspots/results wholesale with
+   four innerHTML writes, so every keystroke destroyed and rebuilt every node
+   in the document (2-5k elements on a long note) and forced a full relayout.
+   Instead we keep the per-line signature strings from the previous render and
+   touch only the lines whose signature actually moved.
+
+   The signature is derived from the OUTPUT of buildLineHTML, never from a hash
+   of its inputs. That matters: `analyze()` has cross-line state (sections,
+   variable scopes, sum/avg/prev runs), so editing line 5 can legitimately
+   change the result printed on line 300. Because line 300 is still re-analyzed
+   and re-built every render, its signature moves whenever its appearance does —
+   a stale row is impossible by construction. Input-keyed memoization would
+   instead have ~11 inputs to remember, and forgetting one paints silently
+   stale output. */
+let prevHlSig=[], prevGutSig=[], prevResSig=[], prevHsHTML='';
+/* A wrapped line's height depends on its own content and the container width,
+   not on its index — so heights only need re-measuring for lines whose content
+   changed, plus everything when the geometry itself changed. Anything that
+   alters editor geometry bumps layoutEpoch. */
+let layoutEpoch=0, measuredEpoch=-1;
+function bumpLayout(){ layoutEpoch++; }
+
 /* Long lines wrap (at word boundaries) instead of being clipped, so a source
    line can span several visual rows. Row counts/positions are measured from the
    real DOM in render() now; charsPerLine only survives as a rough fallback for
@@ -1975,6 +2051,7 @@ function measureChar(){
   // that all pixel positions derive from in sync with the CSS value.
   const lh=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--lh'));
   if(lh>0) LH=lh;
+  bumpLayout();   // char width / row height feed every wrapped-height measurement
 }
 
 /* ---------- number masking (live grouping) ---------- */
@@ -1982,6 +2059,10 @@ function measureChar(){
    regular spaces). Only NBSP is added/removed by masking, which keeps the
    caret-preservation math valid (it counts non-NBSP characters). */
 const MASK_NUM_RE = '\\d[\\d\\u202f]*(?:[.,]\\d+)?(?:[kKM])?';
+// Sticky twins, so regroupText()'s per-character loop neither recompiles a
+// RegExp nor allocates a `text.slice(i)` tail on every digit run.
+const MASK_NUM_AT_RE = new RegExp(MASK_NUM_RE, 'y');
+const IDENT_AT_RE = /[\p{L}\d_]+/uy;
 
 /* Regroup standalone numbers in `text` (dates & identifiers preserved).
    Collapses any existing NBSP grouping then regroups the whole run so
@@ -1993,15 +2074,16 @@ function regroupText(text, caret){
   while(i<n){
     const ul=urlLenAt(text,i);
     if(ul){ out+=text.substr(i,ul); i+=ul; prevChar=text[i-1]; continue; }   // never reformat inside a URL
-    const rest=text.slice(i);
-    const dm=dateAt(rest);
+    const dm=dateAtIdx(text, i);
     if(dm){ out+=dm[0]; i+=dm[0].length; prevChar=dm[0].slice(-1); continue; }
     const ch=text[i];
     if(/\d/.test(ch)){
       if(/[\p{L}_]/u.test(prevChar)){ // part of identifier -> passthrough alnum run
-        const wm=rest.match(/^[\p{L}\d_]+/u); out+=wm[0]; i+=wm[0].length; prevChar=wm[0].slice(-1); continue;
+        IDENT_AT_RE.lastIndex=i;
+        const wm=IDENT_AT_RE.exec(text); out+=wm[0]; i+=wm[0].length; prevChar=wm[0].slice(-1); continue;
       }
-      const nm=rest.match(new RegExp('^'+MASK_NUM_RE));
+      MASK_NUM_AT_RE.lastIndex=i;
+      const nm=MASK_NUM_AT_RE.exec(text);
       let tok=nm[0];
       let suffix=''; if(/[kKM]$/.test(tok)){ suffix=tok.slice(-1); tok=tok.slice(0,-1); }
       const hadDot=/\./.test(tok);
@@ -2133,7 +2215,10 @@ function render(){
     builtRows[k]=built; tintRows[k]=tints;
     sigRows[k]=(built.superRow?'super|':'')+tints.join('|');
   }
-  let hl='';
+  // Reconcile the highlight layer: write only the lines whose rendered form
+  // changed. `dirty` collects those indices — they're the only ones whose
+  // wrapped height can have moved, so they're the only ones re-measured below.
+  const hlCls=new Array(n), hlStyle=new Array(n), hlSig=new Array(n);
   for(let k=0;k<n;k++){
     const built=builtRows[k], tints=tintRows[k], sig=sigRows[k];
     const styles=[];
@@ -2146,42 +2231,100 @@ function render(){
       const bot = (k<n-1 && sigRows[k+1]===sig) ? '0' : '9px';
       if(top!=='9px' || bot!=='9px') styles.push('border-radius:'+top+' '+top+' '+bot+' '+bot);
     }
-    const style=styles.length? ' style="'+styles.join(';')+'"' : '';
-    hl+='<div class="hl-line'+(built.checked?' checked':'')+(built.superRow?' superrow':'')
-       +'" data-i="'+k+'"'+style+'>'+built.html+'</div>';
+    hlCls[k]='hl-line'+(built.checked?' checked':'')+(built.superRow?' superrow':'');
+    hlStyle[k]=styles.join(';');
+    hlSig[k]=hlCls[k]+'\u0001'+hlStyle[k]+'\u0001'+built.html;
   }
-  highlight.innerHTML=hl;
-
-  // 2) Measure each line's actual row span from the DOM (one reflow), then the
-  //    cumulative offsets. Every visual row is exactly LH tall (line-height:LH),
-  //    so offsetHeight/LH is the true row count.
-  lineRowTop=new Array(n); lineRowCount=new Array(n);
   const hlEls=highlight.children;
-  let acc=0;
+  while(hlEls.length>n) highlight.removeChild(highlight.lastChild);
+  const dirty=[];
   for(let k=0;k<n;k++){
-    const el=hlEls[k];
-    const rows=el ? Math.max(1, Math.round(el.offsetHeight/LH)) : 1;
-    lineRowTop[k]=acc; lineRowCount[k]=rows; acc+=rows;
+    if(k<hlEls.length){
+      if(prevHlSig[k]===hlSig[k]) continue;
+      const el=hlEls[k];
+      // className/setAttribute (not style.cssText) so the serialized markup is
+      // byte-identical to what the old innerHTML string produced.
+      if(el.className!==hlCls[k]) el.className=hlCls[k];
+      if(hlStyle[k]) el.setAttribute('style', hlStyle[k]); else el.removeAttribute('style');
+      el.innerHTML=builtRows[k].html;
+    }else{
+      const el=document.createElement('div');
+      el.className=hlCls[k];
+      el.setAttribute('data-i', k);
+      if(hlStyle[k]) el.setAttribute('style', hlStyle[k]);
+      el.innerHTML=builtRows[k].html;
+      highlight.appendChild(el);
+    }
+    dirty.push(k);
   }
+  prevHlSig=hlSig;
+
+  // 2) Measure the row span of every line whose content changed (one batched
+  //    reflow), then recompute the cumulative offsets arithmetically. Every
+  //    visual row is exactly LH tall (line-height:LH), so offsetHeight/LH is
+  //    the true row count. Untouched lines keep the height measured earlier —
+  //    a line's wrap depends on its own text and the container width, and the
+  //    latter bumps layoutEpoch when it changes.
+  const remeasureAll = (layoutEpoch!==measuredEpoch) || lineRowCount.length!==n;
+  const oldRowCount = lineRowCount;
+  lineRowTop=new Array(n); lineRowCount=new Array(n);
+  if(remeasureAll){
+    for(let k=0;k<n;k++){
+      const el=hlEls[k];
+      lineRowCount[k]= el ? Math.max(1, Math.round(el.offsetHeight/LH)) : 1;
+    }
+    measuredEpoch=layoutEpoch;
+  }else{
+    for(let k=0;k<n;k++) lineRowCount[k]=oldRowCount[k];
+    for(let d=0;d<dirty.length;d++){
+      const k=dirty[d], el=hlEls[k];
+      lineRowCount[k]= el ? Math.max(1, Math.round(el.offsetHeight/LH)) : 1;
+    }
+  }
+  let acc=0;
+  for(let k=0;k<n;k++){ lineRowTop[k]=acc; acc+=lineRowCount[k]; }
 
   // 3) Gutter, checkbox hotspots and results column — sized/positioned from the
   //    measured rows so every column lines up with the wrapped text.
-  let g='';
+  const gutEls=gutter.children;
+  const lineCountChanged = gutEls.length!==n;
+  while(gutEls.length>n) gutter.removeChild(gutter.lastChild);
+  const gutSig=new Array(n);
   for(let k=0;k<n;k++){
     const col=lineCols[k];
-    const h=lineRowCount[k]*LH;
-    g+='<div class="gutter-line" data-i="'+k+'" style="height:'+h+'px'
-      +(col?';color:'+col:'')+'">'+(k+1)+'</div>';
+    const style='height:'+(lineRowCount[k]*LH)+'px'+(col?';color:'+col:'');
+    gutSig[k]=style;
+    if(k<gutEls.length){
+      if(prevGutSig[k]===style) continue;
+      // Only the style attribute varies between renders; the class list and
+      // border-radius belong to refreshGutterSel()/selectionGutterSync() and
+      // must survive, which is exactly what reusing the cell buys us.
+      gutEls[k].setAttribute('style', style);
+    }else{
+      const el=document.createElement('div');
+      el.className='gutter-line';
+      el.setAttribute('data-i', k);
+      el.setAttribute('style', style);
+      el.textContent=k+1;
+      gutter.appendChild(el);
+    }
   }
-  gutter.innerHTML=g;
-  refreshGutterSel();                             // selection marks + merged corners on the fresh cells
-  selRangeLines=[-9,-9]; selectionGutterSync();   // re-mark selected-range numbers on the fresh cells
+  prevGutSig=gutSig;
+  refreshGutterSel();                             // selection marks + merged corners
+  // Cells are reused now, so their `.selrange` marks survive a render and the
+  // early-out in selectionGutterSync() is meaningful again — no need to defeat
+  // it on every keystroke. Only a change in line count invalidates the marks.
+  if(lineCountChanged) selRangeLines=[-9,-9];
+  selectionGutterSync();
 
-  let hs='', rs='';
+  let hs='';
+  const resSig=new Array(n);
   const newResultVals={};
+  let wantsFx=false;   // does anything on screen actually need a currency rate?
   for(let k=0;k<n;k++){
     const it=A.lines[k];
     const h=lineRowCount[k]*LH;
+    let rs='';
     if(it.cls.kind==='checkbox'){
       const top=lineRowTop[k]*LH + 14;            // cumulative row offset + padY (always row 0 of its line)
       const left=(it.cls.indent||0)*charW + 16;   // + padX
@@ -2189,6 +2332,7 @@ function render(){
     }
     if(it.rateCmd){
       // currency slash-command pill: "1 $ = 78,4 \u20bd" (or "\u2026" while the rate loads)
+      wantsFx=true;
       const rc=it.rateCmd, per=fxRates[rc.code], ready=per>0;
       const disp = ready ? ('1 '+rc.sym+' = '+fmt(per)+' \u20bd') : '\u2026';
       const anim = resultsPainted && prevResultVals[k]!==undefined && prevResultVals[k]!==disp ? ' changed' : '';
@@ -2211,12 +2355,32 @@ function render(){
     }else{
       rs+='<div class="result-line" data-i="'+k+'" style="height:'+h+'px"></div>';
     }
+    resSig[k]=rs;
   }
   prevResultVals=newResultVals; resultsPainted=true;
-  hotspots.innerHTML=hs;
-  results.innerHTML=rs;
+  // Hotspots are sparse (checkbox lines only), so a single string compare is
+  // enough to skip the rebuild entirely on the overwhelming majority of edits.
+  if(hs!==prevHsHTML){ hotspots.innerHTML=hs; prevHsHTML=hs; }
+  // Results: one node per line, replaced only where the rendered string moved.
+  const resEls=results.children;
+  while(resEls.length>n) results.removeChild(results.lastChild);
+  for(let k=0;k<n;k++){
+    if(k<resEls.length){
+      if(prevResSig[k]===resSig[k]) continue;
+      resEls[k].outerHTML=resSig[k];
+    }else{
+      results.insertAdjacentHTML('beforeend', resSig[k]);
+    }
+  }
+  prevResSig=resSig;
+  maybeRefreshFx(wantsFx);   // network only when a rate is on screen and stale
 
-  syncScroll();
+  // NOTE: syncScroll() is deliberately NOT called here. It reads
+  // input.scrollLeft, and a read right after the four innerHTML writes above
+  // forces a full synchronous layout of the whole freshly-rebuilt document —
+  // it measured at ~15% of the cost of every keystroke. The stray scrollLeft
+  // it corrects can only appear from an actual scroll or a resize, so it is
+  // now driven by those events alone (see the 'scroll' and 'resize' listeners).
   if(searchQuery){ computeMatches(); renderSearch(); }
   renderSelection();   // re-place the rounded selection overlay after layout
   renderCaret();        // re-place the custom block caret + empty-line ghost
@@ -2580,7 +2744,7 @@ function computeMatches(){
   const q=searchQuery;
   if(!q){ searchIdx=-1; return; }
   const ql=q.toLowerCase();
-  const lines=input.value.split('\n');
+  const lines=docLines();
   lines.forEach((line,li)=>{
     const hay=line.toLowerCase();
     let c=0;
@@ -2920,7 +3084,8 @@ function lineBounds(pos){
 function pillRegions(){
   const v=input.value; const regs=[]; let i=0;
   while((i=v.indexOf(SENT,i))!==-1){
-    const m=v.slice(i+1).match(new RegExp('^-?(?:'+NUM_RE.source+')'));
+    SIGNED_NUM_AT_RE.lastIndex=i+1;
+    const m=SIGNED_NUM_AT_RE.exec(v);
     if(m && m[0].length){ regs.push([i, i+1+m[0].length]); i=i+1+m[0].length; }
     else i++;
   }
@@ -2989,8 +3154,9 @@ function varPillRangesInLine(row){
   const am=ASSIGN_RE.exec(raw);
   if(am){ defName=am[1].trim().toLowerCase(); defStart=raw.indexOf(am[1]); }
   for(const name of eligible){
-    const re=new RegExp('(?<![\\p{L}\\d_])'+escapeRe(name)+'(?![\\p{L}\\d_])','giu');
+    const re=wordBoundRe(name,'giu');
     let mt;
+    re.lastIndex=0;   // shared, cached object: never inherit a previous scan's position
     while((mt=re.exec(raw))){
       if(cmt<0 || mt.index<cmt)
         out.push({start:mt.index, end:mt.index+mt[0].length, name, text:mt[0], value:scope[name],
@@ -3066,7 +3232,7 @@ function docTokenAtCaret(){
   if(input.selectionStart!==input.selectionEnd) return null;
   const pos=input.selectionStart;
   const {row,col}=offsetToLineCol(pos);
-  const line=input.value.split('\n')[row];
+  const line=docLines()[row];
   const cs=lineCommentStart(line); if(cs>=0 && col>cs) return null;
   let s=col;
   while(s>0 && /[\p{L}\d_ ]/u.test(line[s-1])) s--;
@@ -3574,9 +3740,15 @@ function onStackDblClick(e){
 
 /* ---------- hover: row lighten + source-line highlight ---------- */
 let hoverRow=-1, srcRow=-1;
+/* At most one row is ever marked, so hold on to the two nodes instead of
+   running querySelectorAll over every line in the document (300+ nodes, twice)
+   on every mousemove — that was the single largest cost on the hover path.
+   A stale reference is harmless: removing a class the node no longer has is a
+   no-op, and a node the renderer dropped is simply garbage. */
+let fxHlEl=null, fxGutEl=null;
 function clearRowFx(){
-  highlight.querySelectorAll('.hl-line.hover,.hl-line.src').forEach(el=>el.classList.remove('hover','src'));
-  gutter.querySelectorAll('.gutter-line.src').forEach(el=>el.classList.remove('src'));
+  if(fxHlEl){ fxHlEl.classList.remove('hover','src'); fxHlEl=null; }
+  if(fxGutEl){ fxGutEl.classList.remove('src'); fxGutEl=null; }
 }
 function setRowFx(){
   clearRowFx();
@@ -3584,7 +3756,11 @@ function setRowFx(){
   // The line merely under the cursor is intentionally NOT highlighted; a
   // whole-line tint appears only when hovering a result pill (→ its source
   // line), handled via srcRow.
-  if(srcRow>=0 && rb[srcRow]){ rb[srcRow].classList.add('src'); const gl=gutter.children[srcRow]; if(gl) gl.classList.add('src'); }
+  if(srcRow>=0 && rb[srcRow]){
+    fxHlEl=rb[srcRow]; fxHlEl.classList.add('src');
+    const gl=gutter.children[srcRow];
+    if(gl){ fxGutEl=gl; gl.classList.add('src'); }
+  }
 }
 /* Given a y offset (already minus padY), find which source line it falls in
    and which of that line's wrapped visual rows (0 = first). Mirrors the
@@ -3611,17 +3787,39 @@ function hitTest(clientX,clientY){
 /* (row, col-within-line) <-> absolute offset in input.value. Used by the
    variable-pill click/dblclick/Backspace handling below. */
 function lineColToOffset(row, col){
-  const lines=input.value.split('\n');
+  const lines=docLines();
   if(row<0) return 0;
   if(row>=lines.length) return input.value.length;
   let off=0;
   for(let i=0;i<row;i++) off+=lines[i].length+1;
   return off+Math.max(0,Math.min(col,lines[row].length));
 }
+/* Memoized `input.value.split('\n')`.
+   Several hot callers each re-split the whole document: renderCaret alone did
+   it three times per call, and it runs up to three times per keystroke, while
+   selectionGutterSync did two slices plus two splits on every selectionchange.
+   Comparing one string reference is far cheaper than allocating N new strings,
+   and keying on the value itself means the cache can never go stale. */
+/* How many '\n' occur in s before index `upto` — i.e. the 0-based row index of
+   that offset. Matches the old `s.slice(0,upto).split('\n').length-1` exactly,
+   including a negative `upto` (which sliced to '' and yielded 0). */
+function countNewlines(s, upto){
+  let c=0; const end=Math.min(upto, s.length);
+  for(let i=0;i<end;i++) if(s.charCodeAt(i)===10) c++;
+  return c;
+}
+let _linesFor=null, _linesCache=null;
+function docLines(){
+  const v=input.value;
+  if(_linesFor!==v){ _linesFor=v; _linesCache=v.split('\n'); }
+  return _linesCache;
+}
 function offsetToLineCol(pos){
-  const before=input.value.slice(0,pos);
-  const lineStart=before.lastIndexOf('\n')+1;
-  const row=before.split('\n').length-1;
+  // Count newlines directly instead of allocating a prefix string and an
+  // array of every line before the caret just to read `.length`.
+  const v=input.value;
+  let row=0, lineStart=0;
+  for(let i=0;i<pos;i++) if(v.charCodeAt(i)===10){ row++; lineStart=i+1; }
   return {row, col:pos-lineStart};
 }
 /* ---------- DOM-accurate character hit-testing ----------
@@ -3701,7 +3899,7 @@ function charRangeRects(row, start, end){
    fall back to a fixed charW-wide cell instead of trusting that literally. */
 function caretCellRect(row, col){
   const el=highlight.children[row]; if(!el) return null;
-  const raw=(input.value.split('\n'))[row]||'';
+  const raw=docLines()[row]||'';
   const rects=charRangeRects(row, col, col+1);
   let best=null;
   for(const r of rects) if(!best || r.width>best.width) best=r;
@@ -3746,7 +3944,7 @@ function renderCaret(){
   const w=Math.max(cell.width,2);
   let html='<div class="caret-block" style="top:'+Math.round(top)+'px;left:'+Math.round(left)+'px;width:'+w+'px;height:'+cell.height+'px"></div>';
   if(cell.ch) html+='<div class="caret-glyph" style="top:'+Math.round(top)+'px;left:'+Math.round(left)+'px;width:'+w+'px">'+esc(cell.ch)+'</div>';
-  const raw=(input.value.split('\n'))[row]||'';
+  const raw=docLines()[row]||'';
   if(raw===''){
     html+='<div class="caret-ghost" style="top:'+Math.round(top)+'px;left:'+Math.round(left+w+2)+'px">Type something...</div>';
   }
@@ -3756,19 +3954,40 @@ function renderCaret(){
 /* Oval pill background behind a variable — shown ONLY while the mouse is
    actually over it (hover-only affordance hinting it's clickable), never
    persistent, unlike result/link pills which always look like pills. */
-function showPillHover(row, start, end){
-  const rects=charRangeRects(row, start, end);
-  if(!rects.length){ hidePillHover(); return; }
+/* Shared by every overlay that paints client rects as stack-relative boxes.
+   showPillHover / showBracketMatch were byte-identical apart from the class
+   name and the target layer; renderSearch and renderCaret repeat the same
+   arithmetic. */
+function rectsToBoxes(rects, cls, layer){
   const sb=stack.getBoundingClientRect();
   let html='';
   for(const r of rects){
     const top=r.top - sb.top + stack.scrollTop;
     const left=r.left - sb.left + stack.scrollLeft;
-    html+='<div class="pill-hover-box" style="top:'+top+'px;left:'+left+'px;width:'+r.width+'px;height:'+r.height+'px"></div>';
+    html+='<div class="'+cls+'" style="top:'+top+'px;left:'+left+'px;width:'+r.width+'px;height:'+r.height+'px"></div>';
   }
-  pillhover.innerHTML=html;
+  layer.innerHTML=html;
 }
-function hidePillHover(){ if(pillhover.innerHTML) pillhover.innerHTML=''; }
+/* Emptying a layer used to be guarded by `if(layer.innerHTML)`, which
+   SERIALIZES the whole subtree to a string just to ask whether it has
+   children — on every mousemove. firstChild answers the same question for
+   free. */
+function clearLayer(layer){ if(layer.firstChild) layer.innerHTML=''; }
+
+/* Moving the mouse a few pixels within the same variable used to re-measure
+   and repaint an identical set of boxes on every mousemove event. Remember
+   which range is currently drawn and do nothing while it holds. render()
+   invalidates it, since the pixel geometry is rebuilt from scratch there. */
+let pillHoverKey='';
+function showPillHover(row, start, end){
+  const key=row+':'+start+':'+end;
+  if(key===pillHoverKey) return;
+  const rects=charRangeRects(row, start, end);
+  if(!rects.length){ hidePillHover(); return; }
+  rectsToBoxes(rects, 'pill-hover-box', pillhover);
+  pillHoverKey=key;
+}
+function hidePillHover(){ if(pillHoverKey!=='' || pillhover.firstChild){ pillHoverKey=''; clearLayer(pillhover); } }
 
 /* Matching-bracket highlight: when the caret sits right against one of a
    coloured bracket pair (either side — the bracket just typed past, or the
@@ -3778,16 +3997,9 @@ function hidePillHover(){ if(pillhover.innerHTML) pillhover.innerHTML=''; }
 function showBracketMatch(row, a, b){
   const rects=charRangeRects(row,a,a+1).concat(charRangeRects(row,b,b+1));
   if(!rects.length){ hideBracketMatch(); return; }
-  const sb=stack.getBoundingClientRect();
-  let html='';
-  for(const r of rects){
-    const top=r.top - sb.top + stack.scrollTop;
-    const left=r.left - sb.left + stack.scrollLeft;
-    html+='<div class="brk-match-box" style="top:'+top+'px;left:'+left+'px;width:'+r.width+'px;height:'+r.height+'px"></div>';
-  }
-  brackethover.innerHTML=html;
+  rectsToBoxes(rects, 'brk-match-box', brackethover);
 }
-function hideBracketMatch(){ if(brackethover.innerHTML) brackethover.innerHTML=''; }
+function hideBracketMatch(){ clearLayer(brackethover); }
 function updateBracketMatch(){
   if(!model || document.activeElement!==input){ hideBracketMatch(); return; }
   const s=input.selectionStart, e=input.selectionEnd;
@@ -4032,11 +4244,14 @@ let selRangeLines=[-9,-9];
 function selectionGutterSync(){
   let a=-1,b=-1;
   if(document.activeElement===input && input.selectionEnd>input.selectionStart){
+    // Count newlines in place. This runs on every selectionchange — i.e. on
+    // every caret move — and used to allocate two prefix strings plus two
+    // arrays of every line before the caret, only to read their `.length`.
     const v=input.value;
-    a=v.slice(0,input.selectionStart).split('\n').length-1;
+    a=countNewlines(v, input.selectionStart);
     // minus one char: a selection ending at the very START of a line
     // (dragging through the newline) doesn't count that next line
-    b=v.slice(0,input.selectionEnd-1).split('\n').length-1;
+    b=countNewlines(v, input.selectionEnd-1);
     if(b<a) b=a;
   }
   if(a===selRangeLines[0] && b===selRangeLines[1]) return;
@@ -4094,6 +4309,7 @@ function showToast(msg){
 
 /* ---------- resizable results column ---------- */
 function applyResultsWidth(w){
+  bumpLayout();   // the text column narrows/widens, so every line can re-wrap
   if(window.innerWidth<=720){
     // phones have no drag handle: clear any stored inline width so the fixed
     // width from the mobile media query governs instead.
@@ -4142,6 +4358,64 @@ const firebaseConfig = {
 function firebaseIsConfigured(){ return !!(firebaseConfig.apiKey && !firebaseConfig.apiKey.includes('ЗАМЕНИТЕ')); }
 
 let auth=null, db=null, currentUser=null, cloudUnsub=null;
+
+/* Set once a real session has existed on this device. It is the synchronous,
+   offline-safe answer to "has this browser ever been signed in?", which is all
+   boot() needs to decide whether to cover the editor. */
+const SIGNED_IN_KEY='calcuta.signedIn';
+function wasSignedIn(){ try{ return !!localStorage.getItem(SIGNED_IN_KEY); }catch(e){ return false; } }
+/* Is there anything on this device worth showing without signing in?
+   Not just "non-empty text": the stock pages ship with DEFAULT_DOC sample
+   content, so a brand-new profile would otherwise look like it had notes.
+   Freshly seeded stock docs carry updated:0 (the same marker the cloud merge
+   already relies on to stop a new device clobbering real data), and stamp()
+   only ever returns a positive clock — so updated>0 means a real edit. */
+function hasLocalContent(){
+  return store.docs.some(d=>d && (d.updated||0)>0 && (d.text||'').trim()!=='');
+}
+function showAuthGate(){ $('authgate').classList.add('show'); }
+function hideAuthGate(){ $('authgate').classList.remove('show'); }
+/* Signed out, but there are local notes: keep them usable and make the sync
+   pip the way back in rather than slamming an opaque wall over the app. */
+function showSignInAffordance(){
+  hideAuthGate();
+  const el=document.getElementById('sync-status');
+  if(el){ el.className='sync-offline'; el.title='Не синхронизируется — нажмите, чтобы войти'; }
+}
+/* Explicit sign-out clears the device's copy, so the privacy property of the
+   old always-on gate survives un-gating: after leaving, nothing is readable
+   here without signing in again. The cloud keeps the data. There is no
+   sign-out control in the UI today — this is the function one would call. */
+function signOutAndWipe(){
+  try{ localStorage.removeItem(SIGNED_IN_KEY); localStorage.removeItem(STORE_KEY); }catch(e){}
+  const done=()=>{ location.reload(); };
+  if(auth && auth.signOut) auth.signOut().then(done, done); else done();
+}
+
+/* ---- lazy Firebase loader ----
+   The three compat bundles are ~512 KB raw / ~151 KB gzip — 1.8x the whole
+   app — and as <script defer> in <head> they blocked DOMContentLoaded, which
+   is what boot() waits for. Nothing about reading and editing local notes
+   needs them, so they are now injected after the first render instead.
+   crossorigin="anonymous" is deliberate: it makes gstatic return a real CORS
+   response, so the service worker caches a verifiable entry instead of an
+   opaque one (opaque entries are unverifiable and charged to quota with heavy
+   padding). Order matters — auth/firestore compat both require app compat. */
+const FB_VERSION='10.12.2';
+const FB_BASE='https://www.gstatic.com/firebasejs/'+FB_VERSION+'/';
+let fbLoadPromise=null;
+function loadFirebase(){
+  if(fbLoadPromise) return fbLoadPromise;
+  const one=(file)=>new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src=FB_BASE+file; s.async=false; s.crossOrigin='anonymous';
+    s.onload=res; s.onerror=()=>rej(new Error(file));
+    document.head.appendChild(s);
+  });
+  fbLoadPromise=one('firebase-app-compat.js')
+    .then(()=>Promise.all([one('firebase-auth-compat.js'), one('firebase-firestore-compat.js')]));
+  return fbLoadPromise;
+}
 
 function initAuth(){
   const statusEl=$('authgate-status'), btn=$('google-signin');
@@ -4211,7 +4485,10 @@ function initAuth(){
 function onAuthChanged(user){
   currentUser=user;
   if(user){
-    $('authgate').style.display='none';
+    hideAuthGate();
+    // Remember on this device that a real session existed, so the next launch
+    // can show the editor immediately instead of waiting for Firebase.
+    try{ localStorage.setItem(SIGNED_IN_KEY,'1'); }catch(e){}
     $('authgate-status').textContent='';
     // NB: no other UI to update here — the old top bar's #status (account
     // name) is gone. A stray reference to it here used to throw BEFORE
@@ -4220,7 +4497,11 @@ function onAuthChanged(user){
     subscribeCloud();
     refreshIdToken();   // cache a bearer token for the keepalive close-flush (see below)
   }else{
-    $('authgate').style.display='flex';
+    try{ localStorage.removeItem(SIGNED_IN_KEY); }catch(e){}
+    // No session. Only cover the app if there is nothing local worth showing —
+    // otherwise leave the notes editable offline and let the sync pip offer
+    // the way back in. Every cloud write already early-returns on !currentUser.
+    if(hasLocalContent()) showSignInAffordance(); else showAuthGate();
     cloudReady=false; cloudRef=null; cachedIdToken=null;
     if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
     setSyncStatus();   // hides the pip
@@ -4729,7 +5010,7 @@ async function openSharedView(){
   if(m){ try{ data=JSON.parse(await b64ToText(decodeURIComponent(m[1]))); }catch(e){ data=null; } }
   if(!data || typeof data.t!=='string'){ initAuth(); return; }   // bad link -> normal app
   sharedMode=true;
-  $('authgate').style.display='none';
+  hideAuthGate();
   input.value=data.t; input.readOnly=true;
   render();
   const bar=document.createElement('div');
@@ -4764,11 +5045,22 @@ function boot(){
   computeCharsPerLine();
   buildSwatches();
   load();
-  // currency rates: show last-known immediately, then refresh from ЦБ РФ and
-  // keep them fresh every hour (the fetch re-renders open conversions).
-  loadFxCache(); fetchFx(); setInterval(fetchFx, 3600000);
-  if(location.hash.indexOf('#doc=')===0) openSharedView();   // read-only shared link
-  else initAuth();
+  // currency rates: show the last-known values immediately. The refresh is no
+  // longer fired here — see maybeRefreshFx(), which only goes to the network
+  // when the document actually contains a rate command and the cache is stale.
+  loadFxCache();
+  if(location.hash.indexOf('#doc=')===0){
+    openSharedView();   // read-only shared link — never touches Firebase
+  }else{
+    // Cover the app only when there is genuinely nothing to look at: no prior
+    // session on this device AND no local content. Otherwise the editor is
+    // live immediately and auth settles in the background.
+    if(!wasSignedIn() && !hasLocalContent()) showAuthGate();
+    // Load the SDK once the browser is idle, after the first paint.
+    const startAuth=()=>loadFirebase().then(initAuth, ()=>initAuth());
+    if(window.requestIdleCallback) requestIdleCallback(startAuth, {timeout:2000});
+    else setTimeout(startAuth, 1);
+  }
 
   input.addEventListener('beforeinput', onBeforeInput);
   input.addEventListener('input', onInput);
@@ -4888,7 +5180,7 @@ function boot(){
   $('brand-menu').addEventListener('click', e=>{
     const th=e.target.closest('.theme-opt');
     if(th){ setTheme(th.dataset.theme); return; }   // stays open for further tweaks
-    const it=e.target.closest('.doc-opt,.bm-item'); if(!it) return;
+    const it=e.target.closest('.doc-opt'); if(!it) return;
     if(it.id==='exp-word'){ exportWord(); closeMenus(); return; }
     if(it.id==='exp-pdf'){ exportPDF(); closeMenus(); return; }
     if(it.id==='share-link'){ shareLink(); closeMenus(); return; }
@@ -5057,7 +5349,19 @@ function boot(){
   // results column resize
   initResultsResize();
 
-  window.addEventListener('resize', ()=>{ measureChar(); applyResultsWidth(store.resultsWidth); render(); });
+  /* Coalesced to one pass per frame. This handler re-measures the monospace
+     metric (which appends a probe element and forces layout), bumps
+     layoutEpoch — so the next render re-measures every line — and then renders.
+     Undebounced it fired ~60 times during the iOS keyboard slide-in and each
+     URL-bar collapse, i.e. exactly when the app most needs to feel smooth. */
+  let resizeRaf=0;
+  window.addEventListener('resize', ()=>{
+    if(resizeRaf) return;
+    resizeRaf=requestAnimationFrame(()=>{
+      resizeRaf=0;
+      measureChar(); applyResultsWidth(store.resultsWidth); render(); syncScroll();
+    });
+  });
   // flush pending edits the moment the tab goes to background / closes —
   // debounced timers freeze on mobile and may never fire otherwise
   // On hide/close, fire BOTH the SDK flush (works if the page lingers) and the
@@ -5088,6 +5392,7 @@ window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluate
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
   curCmdAt, lineCurCmd, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
+  offsetToLineCol, countNewlines, dateAtIdx,
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
 
 })();
