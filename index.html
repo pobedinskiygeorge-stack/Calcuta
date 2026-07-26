@@ -2168,12 +2168,12 @@ function render(){
   let g='';
   for(let k=0;k<n;k++){
     const col=lineCols[k];
-    const sel=selectedGutter.has(k)?' selected':'';
     const h=lineRowCount[k]*LH;
-    g+='<div class="gutter-line'+sel+'" data-i="'+k+'" style="height:'+h+'px'
+    g+='<div class="gutter-line" data-i="'+k+'" style="height:'+h+'px'
       +(col?';color:'+col:'')+'">'+(k+1)+'</div>';
   }
   gutter.innerHTML=g;
+  refreshGutterSel();                             // selection marks + merged corners on the fresh cells
   selRangeLines=[-9,-9]; selectionGutterSync();   // re-mark selected-range numbers on the fresh cells
 
   let hs='', rs='';
@@ -3931,10 +3931,22 @@ function onGutterDragMove(e){
   refreshGutterSel();
 }
 function onGutterUp(){ gutterDrag=false; }
+/* Marks the selected numbers AND squares the edges a selected cell shares
+   with a selected neighbour, so a run reads as one continuous pill instead of
+   a column of pinched ovals. Same idea as the tint-run merging in render(),
+   just driven off the selection set rather than a tint signature. This is the
+   only place `selected` is toggled, so both the drag path and a fresh render
+   get the merged corners for free. */
 function refreshGutterSel(){
-  gutter.querySelectorAll('.gutter-line').forEach(el=>{
-    el.classList.toggle('selected', selectedGutter.has(+el.dataset.i));
-  });
+  const els=gutter.children;
+  for(let i=0;i<els.length;i++){
+    const el=els[i], on=selectedGutter.has(+el.dataset.i);
+    el.classList.toggle('selected', on);
+    if(!on){ el.style.borderRadius=''; continue; }
+    const top=(i>0            && selectedGutter.has(+els[i-1].dataset.i)) ? '0' : '7px';
+    const bot=(i<els.length-1 && selectedGutter.has(+els[i+1].dataset.i)) ? '0' : '7px';
+    el.style.borderRadius=top+' '+top+' '+bot+' '+bot;
+  }
 }
 /* ---------- gutter mirror of the textarea TEXT selection ----------
    Selecting text lights up the numbers of the spanned lines (glyphs only).
@@ -3967,7 +3979,7 @@ function applyLineColor(color){
   selectedGutter.forEach(i=>{
     if(color) lc[i]=color; else delete lc[i];
   });
-  closeCtxMenu(); render(); refreshGutterSel(); scheduleSave();
+  closeCtxMenu(); render(); scheduleSave();   // render() re-marks the gutter itself
 }
 
 /* ---------- copy result ---------- */
