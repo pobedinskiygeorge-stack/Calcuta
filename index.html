@@ -4535,8 +4535,23 @@ function setSyncStatus(state){
    commutative, so every device converges to the same result. activeId and
    resultsWidth stay device-local (which doc you're viewing / how wide your
    results column is shouldn't jump around between devices).
+
+   CRUCIALLY, the merge runs on the WRITE side too: every upload is a Firestore
+   transaction that reads the current server copy, merges, and writes the
+   result. A blind whole-store set() — what pushCloud() used to do — is
+   last-write-wins at store level: a device that had not yet SEEN the latest
+   cloud version (a laptop woken from overnight sleep, a cold cache, a write
+   queued offline days ago) overwrote every newer edit in one shot. That was
+   the "edited at work, came home, the stale Mac clobbered it" failure. With
+   read-merge-write, a push physically cannot erase data it hasn't observed,
+   no matter how stale the device is.
    ================================================================ */
 let cloudRef=null, cloudReady=false, cloudSaveTimer=null;
+/* Wall-clock of the last time THIS device read authoritative (non-cache)
+   server state — via the snapshot listener, a wake-up pull, or a successful
+   transactional push (whose tx.get is a server read). Gates the one remaining
+   non-merging write path (keepaliveFlush). */
+let serverSeenAt=0;
 
 /* Canonical doc order: stock docs pinned first, then others by id (uid()
    encodes creation time), so all devices order identically → convergence. */
@@ -4759,6 +4774,7 @@ function subscribeCloud(){
     // device's localStorage all session and dying when it's shut down (the exact
     // cross-device "my last edits didn't show up" failure). includeMetadataChanges
     // still delivers the later cache→server transition, which re-merges and corrects.
+    if(!snap.metadata.fromCache) serverSeenAt=Date.now();
     if(snap.metadata.fromCache && !snap.exists) return;
     if(!snap.exists){
       if(first){ first=false; cloudReady=true; pushCloud(); }   // cloud truly empty (server-confirmed): seed it
@@ -4766,26 +4782,56 @@ function subscribeCloud(){
     }
     const remote=parseRemote(snap.data());
     if(!remote){ if(first){ first=false; cloudReady=true; } return; }
-    snapStoreColors(remote);   // a device that hasn't migrated yet can still send legacy colours
-    observeStore(remote);   // advance the logical clock past everything the cloud has seen
-    // HARD SAVE from another device: a higher forceEpoch means "make every device
-    // exactly this version". Adopt it wholesale, discarding any local divergence
-    // (even mid-typing) — strict by design, the whole point of the button.
-    if((remote.forceEpoch||0) > (store.forceEpoch||0)){
-      adoptForced(remote);
-      lastSyncedPayload=syncPayload(remote);
-      if(first){ first=false; cloudReady=true; }
-      return;
-    }
-    const merged=mergeStores(store, remote);
-    const suppressed=adoptMerged(merged);
-    if(suppressed) deferRemote(remote);              // re-merge once typing pauses
-    else { deferredRemote=null; clearTimeout(deferredTimer); }  // newer snapshot superseded any deferral
-    const diverged = syncPayload(merged)!==syncPayload(remote);
+    const diverged=reconcileRemote(remote);
     if(first){ first=false; cloudReady=true; }
     if(diverged) pushCloud();                        // cloud was missing some of our data → push merge
-    else lastSyncedPayload=syncPayload(merged);      // cloud already has everything → mark clean
   }, syncError);
+}
+
+/* Reconcile a parsed remote store into this device: advance the clock, honor
+   a newer hard-save wholesale, otherwise merge per doc. Returns true when the
+   cloud is missing something we have (caller should push the merge back).
+   Shared by the live snapshot listener and the wake-up server pull so both
+   paths behave identically. */
+function reconcileRemote(remote){
+  snapStoreColors(remote);   // a device that hasn't migrated yet can still send legacy colours
+  observeStore(remote);   // advance the logical clock past everything the cloud has seen
+  // HARD SAVE from another device: a higher forceEpoch means "make every device
+  // exactly this version". Adopt it wholesale, discarding any local divergence
+  // (even mid-typing) — strict by design, the whole point of the button.
+  if((remote.forceEpoch||0) > (store.forceEpoch||0)){
+    adoptForced(remote);
+    lastSyncedPayload=syncPayload(remote);
+    return false;
+  }
+  const merged=mergeStores(store, remote);
+  const suppressed=adoptMerged(merged);
+  if(suppressed) deferRemote(remote);              // re-merge once typing pauses
+  else { deferredRemote=null; clearTimeout(deferredTimer); }  // newer snapshot superseded any deferral
+  const diverged = syncPayload(merged)!==syncPayload(remote);
+  if(!diverged) lastSyncedPayload=syncPayload(merged);   // cloud already has everything → mark clean
+  return diverged;
+}
+
+/* Actively pull the authoritative server copy and reconcile — called when the
+   tab wakes up (visibilitychange→visible, pageshow) or connectivity returns.
+   After hours of sleep the push channel can take seconds-to-forever to notice
+   it is stale; until then this device would both SHOW old data and treat its
+   old copy as current. One explicit server read closes that window. */
+let serverPullInflight=false;
+function refreshFromServer(){
+  if(!db||!currentUser||!cloudRef||serverPullInflight) return;
+  serverPullInflight=true;
+  refreshIdToken();   // sleep can outlive the ~1h ID token; keepaliveFlush needs a live one
+  cloudRef.get({source:'server'}).then(snap=>{
+    serverSeenAt=Date.now();
+    if(!snap.exists){ if(cloudReady && isCloudDirty()) pushCloud(); return; }
+    const remote=parseRemote(snap.data());
+    if(!remote) return;
+    const diverged=reconcileRemote(remote);
+    cloudReady=true;   // we reconciled against authoritative data — uploads are safe
+    if(diverged) pushCloud();
+  }).catch(()=>{}).then(()=>{ serverPullInflight=false; });
 }
 
 /* An update that arrives mid-typing is held off the active doc (the user's
@@ -4811,61 +4857,113 @@ function deferRemote(remote){
 // flag unreliable. `everEdited` avoids warning on a no-edit offline close.
 let lastSyncedPayload=null, everEdited=false, cachedIdToken=null;
 function isCloudDirty(){ return !!currentUser && everEdited && syncPayload(store)!==lastSyncedPayload; }
+/* Read-merge-write upload. The transaction's get() sees the CURRENT server
+   copy (even one written seconds ago by another device that this device's
+   listener hasn't delivered yet), merges per doc, and commits — Firestore
+   retries the whole callback on a concurrent write, so the merge is always
+   against the version that actually wins. Offline the transaction FAILS
+   rather than queueing a blind overwrite (the durable-queued set() of the old
+   implementation was itself a clobber vector: it could land days later on top
+   of much newer data). Nothing is lost by failing: the edit is already in
+   localStorage, and the retry timer / 'online' / wake-up paths re-push. */
+let pushInflight=false, pushRetryTimer=null;
+function pushCloudNow(){
+  if(!db||!currentUser||!cloudRef||!cloudReady) return;
+  if(pushInflight) return;               // the in-flight push re-checks dirtiness when it lands
+  pushInflight=true;
+  clearTimeout(pushRetryTimer);
+  setSyncStatus('saving');
+  let adopt=null, sent=null;
+  db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
+    adopt=null;                          // reset per attempt — the callback re-runs on contention
+    const remote=snap.exists?parseRemote(snap.data()):null;
+    if(remote){ snapStoreColors(remote); observeStore(remote); }
+    if(remote && (remote.forceEpoch||0)>(store.forceEpoch||0)){
+      adopt={forced:remote}; sent=syncPayload(remote);
+      return;                            // a newer hard save stands — adopt it, write nothing
+    }
+    const next=remote?mergeStores(store,remote):store;
+    sent=syncPayload(next);
+    if(remote && sent!==syncPayload(store)) adopt={merged:next};   // remote had news for us
+    tx.set(cloudRef,{ data: JSON.stringify(next), updated: Date.now() });
+  })).then(()=>{
+    serverSeenAt=Date.now();
+    if(adopt){ if(adopt.forced) adoptForced(adopt.forced); else adoptMerged(adopt.merged); }
+    lastSyncedPayload=sent;
+    syncError(null); setSyncStatus('saved');
+    pushInflight=false;
+    // content-only dirtiness (no everEdited): the store can differ from the
+    // cloud without a this-session edit (e.g. last session's data never made
+    // it up), and the user may also have kept typing while we were in flight
+    if(syncPayload(store)!==lastSyncedPayload) pushCloud();
+  }).catch(err=>{
+    pushInflight=false;
+    syncError(err);
+    clearTimeout(pushRetryTimer);        // offline/unreachable: localStorage has it — retry soon
+    pushRetryTimer=setTimeout(()=>{ if(syncPayload(store)!==lastSyncedPayload) pushCloud(); }, 15000);
+  });
+}
 function pushCloud(){
   if(!db||!currentUser||!cloudRef||!cloudReady) return;
   clearTimeout(cloudSaveTimer);
   setSyncStatus('saving');
-  cloudSaveTimer=setTimeout(()=>{
-    const sent=syncPayload(store);                     // snapshot the content being written
-    cloudRef.set({ data: JSON.stringify(store), updated: Date.now() })
-      .then(()=>{ lastSyncedPayload=sent; syncError(null); setSyncStatus('saved'); }).catch(syncError);
-  }, 500);
+  cloudSaveTimer=setTimeout(pushCloudNow, 500);
 }
 function cloudSave(){ everEdited=true; if(cloudReady) pushCloud(); }
 
-/* HARD SAVE — force THIS device's current version onto the cloud and every
-   other device (on or off). Bumps forceEpoch (monotonic) so remote devices
-   adopt it wholesale via the snapshot handler, then writes the whole store
-   immediately. Offline, the write enters Firestore's durable queue and lands
-   when connectivity returns, so shut-down devices still pick it up. */
-let hardSaveWait=null, hardSaveDoneTimer=null;
+/* HARD SAVE — make sure THIS device's current content lands on the cloud and
+   every other device (on or off). Reads the server copy in a transaction,
+   MERGES (so a stale device pressing the button cannot roll every other
+   device back to an old version — the exact disaster a blind forced write
+   makes possible), then stamps the merged result with a strictly-newer
+   forceEpoch so all devices adopt exactly it, even mid-typing. Offline the
+   transaction fails; the press is remembered and retried when connectivity
+   returns. */
+let hardSaveWait=null, hardSaveDoneTimer=null, hardSavePending=false;
 function hardSave(){
   if(!db||!currentUser||!cloudRef) return;
-  // Wait for the first reconciliation before clobbering (online only) so a
+  // Wait for the first reconciliation before writing (online only) so a
   // fresh device can't overwrite the real cloud with un-synced stock content.
   if(!cloudReady && navigator.onLine){
     setSyncStatus('saving');
     clearTimeout(hardSaveWait); hardSaveWait=setTimeout(hardSave, 300); return;
   }
   const btn=$('cloud-save'), done=$('cloud-done');
-  store.forceEpoch=Math.max(store.forceEpoch||0, Date.now())+1;   // strictly newer than anything seen
   everEdited=true; persist();
   clearTimeout(cloudSaveTimer);                                    // cancel any pending debounced push
   if(btn) btn.disabled=true;
   setSyncStatus('saving');
-  const sent=syncPayload(store);
-  cloudRef.set({ data: JSON.stringify(store), updated: Date.now() })
-    .then(()=>{
+  let adopt=null, sent=null;
+  db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
+    const remote=snap.exists?parseRemote(snap.data()):null;
+    if(remote){ snapStoreColors(remote); observeStore(remote); }
+    const next=remote?mergeStores(store,remote):store;
+    next.forceEpoch=Math.max(store.forceEpoch||0, (remote&&remote.forceEpoch)||0, Date.now())+1;
+    adopt=next; sent=syncPayload(next);
+    tx.set(cloudRef,{ data: JSON.stringify(next), updated: Date.now() });
+  })).then(()=>{
+      serverSeenAt=Date.now(); hardSavePending=false;
+      adoptMerged(adopt);                // pick up anything newer the server had
       lastSyncedPayload=sent; syncError(null); setSyncStatus('saved');
       if(btn) btn.disabled=false;
       if(done) done.classList.add('show');
       clearTimeout(hardSaveDoneTimer);
       hardSaveDoneTimer=setTimeout(()=>{ if(done) done.classList.remove('show'); closeMenus(); }, 1900);
     })
-    .catch(err=>{ if(btn) btn.disabled=false; syncError(err); });
+    .catch(err=>{ if(btn) btn.disabled=false; hardSavePending=true; syncError(err); });
 }
 /* Immediate push — no debounce. For moments when timers are about to freeze
    (phone backgrounds the tab / page is closing): the 300ms save and 500ms
    push timers never fire there, so an edit made just before switching apps
-   used to sit only in memory until the tab came back — or die with it. */
+   used to sit only in memory until the tab came back — or die with it.
+   Dirty-gated: an idle tab (e.g. one that just woke from overnight sleep with
+   a stale copy) must never write to the cloud "just in case". */
 function flushSync(){
   clearTimeout(saveTimer); persist();
   if(!db||!currentUser||!cloudRef||!cloudReady) return;
+  if(!isCloudDirty()) return;
   clearTimeout(cloudSaveTimer);
-  setSyncStatus('saving');
-  const sent=syncPayload(store);
-  cloudRef.set({ data: JSON.stringify(store), updated: Date.now() })
-    .then(()=>{ lastSyncedPayload=sent; syncError(null); setSyncStatus('saved'); }).catch(syncError);
+  pushCloudNow();
 }
 /* Keep a fresh bearer token cached so the keepalive close-flush below can send
    an authenticated REST write synchronously (getIdToken is async and can't be
@@ -4881,9 +4979,20 @@ function refreshIdToken(){
    allowed to outlive the page (up to ~64KB), so we write the current store
    straight to the Firestore REST API here. Authenticated with the cached token,
    so it passes the same per-user security rules as the SDK path. Skipped when
-   oversized (keepalive cap) — the SDK/offline-queue path still covers that. */
+   oversized (keepalive cap) — the SDK path still covers that.
+
+   This is the ONE remaining non-merging write (a single REST PATCH cannot
+   read-merge-write), so it is double-gated: only when there is actually
+   something unsynced to say (dirty), and only when this device has read
+   authoritative server state moments ago (so its store is a superset of the
+   cloud and the blind overwrite is safe). A tab that slept for hours fails
+   the freshness gate and skips — nothing is lost, the edit lives in
+   localStorage and the next wake-up/open merges it in properly. */
+const KEEPALIVE_FRESH_MS=3*60*1000;
 function keepaliveFlush(){
   if(!currentUser||!cachedIdToken||!navigator.onLine) return;
+  if(!isCloudDirty()) return;
+  if(Date.now()-serverSeenAt > KEEPALIVE_FRESH_MS) return;
   const body=JSON.stringify({ fields:{
     data:{ stringValue: JSON.stringify(store) },
     updated:{ integerValue: String(Date.now()) },
@@ -5367,8 +5476,15 @@ function boot(){
   // debounced timers freeze on mobile and may never fire otherwise
   // On hide/close, fire BOTH the SDK flush (works if the page lingers) and the
   // keepalive REST write (survives a hard unload/OS shutdown) — belt and suspenders.
-  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden'){ flushSync(); keepaliveFlush(); } });
+  // On wake (visible / restored from bfcache), pull the server copy and merge:
+  // a tab that slept through edits made elsewhere must reconcile BEFORE it
+  // shows anything or writes anything, not wait for the push channel to notice.
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState==='hidden'){ flushSync(); keepaliveFlush(); }
+    else refreshFromServer();
+  });
   window.addEventListener('pagehide', ()=>{ flushSync(); keepaliveFlush(); });
+  window.addEventListener('pageshow', ()=>{ refreshFromServer(); });
   // desktop window/tab close. Fire the flushes, and if there are still-unsynced
   // changes (never server-acked — offline, blocked, or edited in the last instant)
   // surface the browser's "leave site?" prompt so the user doesn't walk away
@@ -5377,9 +5493,15 @@ function boot(){
     flushSync(); keepaliveFlush();
     if(isCloudDirty()){ e.preventDefault(); e.returnValue=''; return ''; }
   });
-  // reflect connectivity in the sync pip; a regained connection re-pushes
+  // reflect connectivity in the sync pip; a regained connection reconciles
+  // with the server first (merge), then re-pushes anything still unsynced
   window.addEventListener('offline', ()=>setSyncStatus('offline'));
-  window.addEventListener('online', ()=>{ setSyncStatus('saved'); refreshIdToken(); if(cloudReady) pushCloud(); });
+  window.addEventListener('online', ()=>{
+    setSyncStatus('saved'); refreshIdToken();
+    if(hardSavePending){ hardSavePending=false; hardSave(); }
+    refreshFromServer();
+    if(cloudReady && isCloudDirty()) pushCloud();
+  });
   // keep the keepalive token fresh (Firebase ID tokens expire ~1h)
   setInterval(refreshIdToken, 1800000);
 
@@ -5394,7 +5516,18 @@ window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluate
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
   curCmdAt, lineCurCmd, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
   offsetToLineCol, countNewlines, dateAtIdx,
-  createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); }};
+  createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); },
+  // seam for tests/staletest.js: drive the real cloud write paths against a
+  // fake Firestore, so the "stale device must never clobber newer cloud data"
+  // guarantees stay regression-tested. Never used by the app itself.
+  __syncTest:{
+    inject:(fakeDb,fakeRef,user)=>{ db=fakeDb; cloudRef=fakeRef; currentUser=user; cloudReady=true; cachedIdToken='test-token'; },
+    setStore:(s)=>{ store=s; observeStore(store); loadActiveIntoEditor(); },
+    setSynced:(payload)=>{ lastSyncedPayload=payload; everEdited=true; },
+    setServerSeenAt:(t)=>{ serverSeenAt=t; },
+    state:()=>({ serverSeenAt, cloudReady, lastSyncedPayload, hardSavePending, pushInflight }),
+    pushCloudNow, flushSync, keepaliveFlush, hardSave, refreshFromServer, reconcileRemote, isCloudDirty, parseRemote,
+  }};
 
 })();
 </script>
