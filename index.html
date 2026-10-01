@@ -2934,54 +2934,61 @@ sum
 скидка = итого - 10%
 срок 12.05`;
 
-/* ---------- checkbox transform (++ -> [ ]) & toggle ---------- */
-function transformDoubleplus(){
-  // "++", "хх" or "xx" at the very start of the line immediately becomes a
-  // checkbox, no trailing space required (convenient on a phone). At the
-  // very end of the line, "++" still works attached to the last word, but
-  // "хх"/"xx" only triggers when it's its own token (preceded by a space) —
-  // otherwise any word that happens to end in "хх" (e.g. Cyrillic text) would
-  // false-trigger. The marker sitting in the middle of the line is always
-  // left untouched.
-  const val=input.value;
-  const caret=input.selectionStart;
-  const lineStart=caret>0 ? val.lastIndexOf('\n',caret-1)+1 : 0;
-  const lineEnd=val.indexOf('\n',caret); const end=lineEnd===-1?val.length:lineEnd;
-  const line=val.slice(lineStart,end);
-
-  const startM=/^(\s*)(?:\+\+|[хХxX]{2})(.*)$/.exec(line);
-  if(startM){
-    const rebuilt=startM[1]+'[ ] '+startM[2];
-    const before=val.slice(0,lineStart), after=val.slice(end);
-    input.value=before+rebuilt+after;
-    const delta=rebuilt.length-line.length;   // 4 - 2 = +2
-    const nc=Math.max(lineStart+startM[1].length+4, caret+delta);
-    input.setSelectionRange(nc,nc);
-    return true;
+/* ---------- "/текст" -> checkbox, and toggle ----------
+   A line that starts with "/" glued to a word becomes a task: "/купить хлеб"
+   -> "[ ] купить хлеб". A "/" at a line start already means other things,
+   and those always win:
+   - "/тег", "/12.05", "/usd": tag / date spotlight, currency-rate command;
+   - "/переменная": division by a variable defined in this "#" section (the
+     continuation line of a multi-line assignment, say);
+   - "//" is a note; "/12" and "/ x" have no word glued to the slash.
+   The word must be finished first - a space after it on the line being
+   typed, or Enter for the line just left - because "/бюдж" may still grow
+   into "/бюджет" or "/usd". While the text after the slash could still
+   become a multi-word variable or tag ("/личный " -> "/личный бюджет"),
+   the line keeps waiting. Deletions never convert anything. */
+const SLASH_TASK_RE=/^([ \t]*)\/(\p{L}[\p{L}\d_]*)(?=\s|$)/u;
+function slashTaskAt(lines, row, complete){
+  const line=lines[row], m=SLASH_TASK_RE.exec(line);
+  if(!m) return -1;
+  const i=m[1].length;
+  if(!complete && !/\s/.test(line[i+1+m[2].length]||'')) return -1;     // word still being typed
+  if(tagTriggerLenAt(line,i) || dateTriggerLenAt(line,i) || curCmdAt(line,i)) return -1;
+  const A=analyze(lines.join('\n'));
+  const vars=A.varsBySection[A.lines[row].section];
+  const rest=line.slice(i+1).toLowerCase();
+  const names=[...(vars||[])].concat((store.tags||[]).map(t=>(t.label||'').toLowerCase()));
+  for(const v of names){
+    if(!v) continue;
+    if(rest.startsWith(v) && !/[\p{L}\d_]/u.test(rest[v.length]||' ')) return -1;   // "/переменная": real division
+    if(!complete && v.startsWith(rest)) return -1;                                   // could still become one
   }
-
-  const plusEnd=/^(\s*)(\S.*?)\+\+$/.exec(line);
-  const xxEnd = plusEnd ? null : /^(\s*)(\S.*)\s[хХxX]{2}$/.exec(line);
-  const endM=plusEnd||xxEnd;
-  if(endM){
-    // Both markers only CREATE a task, never complete one: "текст хх" turns
-    // into an UNCHECKED "[ ] текст" exactly like "текст ++". Marking a task
-    // done is exclusively a tap on the checkbox (toggleCheckbox) — typing must
-    // never flip that state, so on a line that is already a checkbox the typed
-    // marker is simply consumed and the existing state is preserved.
-    const body=endM[2];
-    const cb=/^\[([ xX])\]\s?(.*)$/.exec(body);
-    const rebuilt = cb
-      ? endM[1]+'['+cb[1]+'] '+cb[2]
-      : endM[1]+'[ ] '+body;
-    const before=val.slice(0,lineStart), after=val.slice(end);
-    input.value=before+rebuilt+after;
-    const delta=rebuilt.length-line.length;
-    const nc=Math.max(lineStart+rebuilt.length, caret+delta);
-    input.setSelectionRange(nc,nc);
-    return true;
+  return i;
+}
+function transformSlashTask(e){
+  if(e && e.inputType && (e.inputType.startsWith('delete') || e.inputType.startsWith('history'))) return;
+  const val=input.value, caret=input.selectionStart;
+  const lines=val.split('\n');
+  const row=countLinesBefore(val, caret);
+  // the line being typed (word finished by a space) and, right after Enter,
+  // the line just left (finished by the line break itself)
+  const cands=[[row,false]];
+  if(caret>0 && val[caret-1]==='\n' && row>0) cands.push([row-1,true]);
+  let out=lines, nc=caret, changed=false;
+  for(const [r,complete] of cands){
+    const i=slashTaskAt(out, r, complete);
+    if(i<0) continue;
+    if(out===lines) out=lines.slice();
+    out[r]=out[r].slice(0,i)+'[ ] '+out[r].slice(i+1);
+    let ls=0; for(let k=0;k<r;k++) ls+=out[k].length+1;
+    if(nc>ls+i) nc+=3;                                   // "/" -> "[ ] " is three chars longer
+    changed=true;
   }
-  return false;
+  if(changed){ input.value=out.join('\n'); input.setSelectionRange(nc,nc); }
+}
+function countLinesBefore(s, upto){
+  let c=0; for(let k=0;k<upto;k++) if(s.charCodeAt(k)===10) c++;
+  return c;
 }
 function toggleCheckbox(i){
   const lines=input.value.split('\n');
@@ -3067,7 +3074,7 @@ function transformHashSpace(e){
 let composing=false;
 function onInput(e){
   if(composing) return;
-  transformDoubleplus();
+  transformSlashTask(e);
   transformSlashSpace();
   transformHashSpace(e);
   autoIndent();
