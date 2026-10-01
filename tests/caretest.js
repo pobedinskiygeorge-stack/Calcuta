@@ -10,7 +10,7 @@ const EXE = path.join(os.homedir(),
   'Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell');
 
 const DOC = [
-  '// Заголовок',
+  '# Заголовок',
   'доход = 2 500 000',
   '',
   'аренда 120 000',

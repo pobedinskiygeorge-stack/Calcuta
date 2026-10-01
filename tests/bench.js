@@ -17,7 +17,7 @@ const EXE = path.join(
 // aggregation and plain prose, repeated to reach the target line count.
 function makeDoc(lines) {
   const block = [
-    '// Раздел {i}',
+    '# Раздел {i}',
     'доход{i} = 2 500 000',
     'налог{i} = доход{i} * 13%',
     'чистыми{i} = доход{i} - налог{i}',

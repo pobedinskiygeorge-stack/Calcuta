@@ -15,7 +15,7 @@ const os = require('os');
 const EXE = path.join(os.homedir(),
   'Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell');
 
-const NOTES = '// Мои заметки\nдоход = 2 500 000\nналог = доход * 13%\n[ ] проверить смету';
+const NOTES = '# Мои заметки\nдоход = 2 500 000\nналог = доход * 13%\n[ ] проверить смету';
 
 function seedStore(notes) {
   return {

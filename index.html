@@ -56,7 +56,7 @@
                               rest of the base hues so it reads as one of them rather
                               than shouting over them */
   --var:#5ecb7e;           /* the one green — variables, results, checkmarks */
-  --super:#b98cf5;         /* purple — "//" headings, quotes */
+  --super:#b98cf5;         /* purple — "#" headings, quotes */
   --num:#7ec8f5;           /* sky blue — numbers, links */
   --date:#e3b755;          /* yellow — dates dd.mm, currency, search */
 
@@ -76,7 +76,7 @@
   /* ---- Soft washes derived from the base hues. ---- */
   --accent-soft:rgba(232,128,44,.16);
   --pill-hover-bg:rgba(94,203,126,.18); /* oval bg behind a variable + usage pills */
-  --super-soft:rgba(185,140,245,.14);   /* whole-row fill of a "//" heading */
+  --super-soft:rgba(185,140,245,.14);   /* whole-row fill of a "#" heading */
   --date-spot:rgba(227,183,85,.16);     /* whole-line tint for "/dd.mm" spotlight */
   --link-soft:rgba(126,200,245,.14);    /* URL pill fill */
   --search-mark:rgba(227,183,85,.30);
@@ -95,7 +95,7 @@
   --danger-soft:rgba(241,64,101,.16);
 
   /* ---- Neutrals. ---- */
-  --comment:#8f897c;       /* "#" comment lines: muted but readable gray */
+  --comment:#8f897c;       /* "//" note lines: muted but readable gray */
   --op:#8c8778;            /* assignment "=" (muted) */
   --checked-text:#79856f;  /* faded text of a completed task */
   --row-hover:rgba(255,255,255,.035);
@@ -465,7 +465,7 @@ button{font-family:inherit;color:inherit}
    (inset box-shadows) — renders with soft rounded corners, never a hard
    rectangle. Radius clips the inset box-shadows too. */
 .hl-line{min-height:var(--lh);width:100%;border-radius:9px}
-/* "//" supertask heading: the purple fills the WHOLE row, not just the text.
+/* "#" supertask heading: the purple fills the WHOLE row, not just the text.
    Declared before .src so the transient "source line" reference still wins on
    a heading. Rounding and the same-tint row merging come from .hl-line above. */
 .hl-line.superrow{background:var(--super-soft)}
@@ -1323,8 +1323,8 @@ function evaluateLenient(toks, scope, ctx){
    Line classification & document analysis.
    ================================================================ */
 const CB_RE   = /^(\s*)\[([ xX])\]\s?/;     // checkbox marker
-const SUPER_RE= /^(\s*)\/\/\s?/;            // supertask //
-const HEADER_RE=/^(\s*)#\s?/;               // header #
+const SUPER_RE= /^(\s*)#\s?/;               // supertask heading #
+const HEADER_RE=/^(\s*)\/\/\s?/;            // note //  (kind 'header' is historical: it is the inert note)
 
 function classify(line){
   let m;
@@ -1338,13 +1338,13 @@ function classify(line){
    "переменная () = 1000 * 1.25") - without it, "()" there would make the
    whole line fail to match at all (parens aren't in the name charset),
    silently dropping the assignment and the name's highlighting with it.
-   NB: "#" is deliberately NOT in the prefix group - a "#" line is a code
-   comment and must never define a variable or touch math in any way. */
+   NB: "//" is deliberately NOT in the prefix group - a "//" line is a note
+   and must never define a variable or touch math in any way. */
 /* The right side may be EMPTY: a bare "переменная =" with nothing typed yet
    (or whose expression continues on the next line) still counts as a real
    assignment - it's the "declared, value not entered yet" state, treated as
    0 until a real expression is typed (see the empty-rhs branch in analyze()). */
-const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|\/\/\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.*)$/u;
+const ASSIGN_RE = /^\s*(?:\[[ xX]\]\s?|#\s?)?([\p{L}][\p{L}\d _]*?)\s*(\(\))?\s*=\s*(.*)$/u;
 function assignHead(line){
   const m=ASSIGN_RE.exec(line);
   if(!m) return null;
@@ -1355,7 +1355,7 @@ function assignHead(line){
 /* Multi-line variable assignment. After "имя =", the expression may continue
    onto the following physical lines (single Enter). Each continuation line is
    folded into the RHS as if it were one line, up until an EMPTY line (the "two
-   line breaks in a row" the user asked to stop the chain), a "//"/"#" heading,
+   line breaks in a row" the user asked to stop the chain), a "#" heading or "//" note,
    a checkbox, or a new "y =" assignment. A line is folded only while the joined
    expression is still "open" — the RHS so far ends on an operator, or the
    continuation begins with one (or the head's own RHS is empty) — so an ordinary
@@ -1406,9 +1406,9 @@ function computeAssignments(lines){
   return {heads, consumed};
 }
 
-/* A "//" supertask line starts a brand-new variable-scope section (itself
-   included); everything before the first "//" is section 0. Sections let
-   the same variable name hold independent values under different "//"
+/* A "#" supertask line starts a brand-new variable-scope section (itself
+   included); everything before the first "#" is section 0. Sections let
+   the same variable name hold independent values under different "#"
    headings without colliding. */
 function computeSections(lines){
   const sec=new Array(lines.length);
@@ -1451,7 +1451,7 @@ function hasRoundMarker(s){
 function applyRoundMarker(v){ return Math.ceil(v/10)*10; }
 
 /* Analyze the full document top-to-bottom, producing per-line results.
-   Variables are scoped per "//" section: each section gets its own `scope`
+   Variables are scoped per "#" section: each section gets its own `scope`
    (assignment values) and `varDefLine` (name -> first defining line index
    within that section), so the same name can hold a different value in
    parallel under a different heading. */
@@ -1484,8 +1484,8 @@ function analyze(text){
     const isBlank=line.trim()==='';
     let result=null, assignedName=null, calcRange=null, error=false, dateCount=false;
 
-    // run boundary: blank line or "//" heading resets the contiguous block.
-    // A "#" comment is transparent: it neither contributes nor breaks the
+    // run boundary: blank line or "#" heading resets the contiguous block.
+    // A "//" note is transparent: it neither contributes nor breaks the
     // run, so sum/avg/prev see straight through it.
     if(isBlank || cls.kind==='super'){ ctx.contig=[]; }
 
@@ -1509,7 +1509,7 @@ function analyze(text){
         const name=am[1].trim().toLowerCase();
         if(name && !/^\d/.test(name) && !KEYWORDS.has(name)){
           const rhs=am[3];
-          const rhsCode=stripLineComment(rhs);   // "x = 121 440 #note" -> "x = 121 440"
+          const rhsCode=stripLineComment(rhs);   // "x = 121 440 //note" -> "x = 121 440"
           if(rhsCode.trim()===''){
             // "имя =" with nothing typed after it yet: still a real
             // assignment (green, pill/backspace rules apply everywhere it's
@@ -1618,7 +1618,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     }
   }
 
-  // inline "#" comment tail (text/checkbox lines only): computed once here,
+  // inline "//" note tail (text/checkbox lines only): computed once here,
   // painted over everything at the end, reused by the spotlight checks below
   const cmtStart=(cls.kind!=='super'&&cls.kind!=='header') ? lineCommentStart(raw) : -1;
 
@@ -1627,7 +1627,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   // whole line (marker included) so char widths match the textarea exactly.
   const bodyStart=(cls.kind==='checkbox')?markerLen:0;
 
-  // ---- whole-line styles for super/header (include the // or # marker) ----
+  // ---- whole-line styles for super/header (include the # or // marker) ----
   if(cls.kind==='super'){ paint(0,len,'super',P.base); }
   else if(cls.kind==='header'){ paint(0,len,'header',P.base); }
 
@@ -1701,7 +1701,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
       let m;
       while((m=re.exec(scanText))){
         // A multi-word phrase is a label only at the start of the line's
-        // CONTENT ("личный бюджет: 200") - auto-indent spaces under a "//"
+        // CONTENT ("личный бюджет: 200") - auto-indent spaces under a "#"
         // section don't count. Mid-line, only the word touching the colon
         // is the label ("имя: иван город: москва" -> "имя:" and "город:",
         // never the value between them).
@@ -1730,13 +1730,13 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
         if(m.index>=bodyStart) paint(m.index, m.index+m[0].length, 'quote', P.quote, {type:'quote'});
       }
     }
-    // ---- inline "#" comment: the tail is uniformly gray, over everything
+    // ---- inline "//" note: the tail is uniformly gray, over everything
     //      (variables, tags, links, numbers all lose to it), and hover/click
-    //      metas under it are cleared so nothing in a comment is interactive ----
+    //      metas under it are cleared so nothing in a note is interactive ----
     if(cmtStart>=0) paint(Math.max(cmtStart,bodyStart), len, 'header', P.cmt, {type:'comment'});
   }
 
-  // ---- tags (custom colors) ---- (never inside a "#" comment)
+  // ---- tags (custom colors) ---- (never inside a "//" note)
   if(cls.kind!=='header')
   for(const tag of tags){
     if(!tag.label) continue;
@@ -1778,7 +1778,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     dateSpotlight = lineHasBareDate(cmtStart<0?raw:raw.slice(0,cmtStart), activeDates);
   }
 
-  // ---- variables (top priority) ---- (never inside a "#" comment)
+  // ---- variables (top priority) ---- (never inside a "//" note)
   if(vars.size && cls.kind!=='header'){
     // The LHS name of an assignment on THIS line is the variable's original
     // (its definition) - plain green, no pill. Every other occurrence is a
@@ -1813,7 +1813,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   }
 
   // ---- "!документ" links to other Calcuta documents (never on a heading or
-  //      inside a "#" comment: those lines stay their own uniform style) ----
+  //      inside a "//" note: those lines stay their own uniform style) ----
   if(cls.kind!=='super' && cls.kind!=='header') for(let i=bodyStart;i<len;i++){
     if(cmtStart>=0 && i>=cmtStart) break;
     if(raw[i]!=='!') continue;
@@ -1859,7 +1859,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
 
   // Empty lines keep their height via the fixed .hl-line height; no filler
   // char is added so overlay text stays 1:1 with the textarea.
-  // A "//" heading's purple fill is a ROW background (.hl-line.superrow, set by
+  // A "#" heading's purple fill is a ROW background (.hl-line.superrow, set by
   // render()) rather than an inline wrapper, so it spans the full width instead
   // of hugging the text. Nothing is added around the glyphs at all, which also
   // means there is no padding/negative-margin dance to keep the caret aligned.
@@ -1887,19 +1887,19 @@ function docLinkAt(raw, i){
   return best;
 }
 
-/* Start index of an inline "#" comment in a single line, or -1.
-   Shell-like rules: the "#" must be at position 0 or preceded by whitespace
-   (incl. the formatter's no-break/padding spaces) - so "заказ#42" and "C#"
-   are plain text; it must not sit inside a URL (site.com/page#anchor stays
-   a link) and not inside a paired "quoted" range. Everything from the
-   marker to the end of the line is comment: gray, and invisible to math. */
+/* Start index of an inline "//" note in a single line, or -1.
+   The "//" must be at position 0 or preceded by whitespace (incl. the
+   formatter's no-break/padding spaces) - so "1//2" and "и/или//" are plain
+   text; it must not sit inside a URL (https://… is a link, never a note) and
+   not inside a paired "quoted" range. Everything from the marker to the end
+   of the line is a note: gray, and invisible to math. */
 function lineCommentStart(s){
-  if(s.indexOf('#')===-1) return -1;
+  if(s.indexOf('//')===-1) return -1;
   const urls=urlRanges(s);
   const quotes=[]; const qre=/"[^"\n]*"/g; let qm;
   while((qm=qre.exec(s))) quotes.push([qm.index, qm.index+qm[0].length]);
-  for(let i=0;i<s.length;i++){
-    if(s[i]!=='#') continue;
+  for(let i=0;i<s.length-1;i++){
+    if(s[i]!=='/' || s[i+1]!=='/') continue;
     if(i>0 && !/[ \t\u00a0\u202f]/.test(s[i-1])) continue;
     if(urls.some(r=>i>=r.start&&i<r.end)) continue;
     if(quotes.some(([a,b])=>i>a&&i<b)) continue;
@@ -1907,7 +1907,7 @@ function lineCommentStart(s){
   }
   return -1;
 }
-/* The line with any inline comment cut off - what math and scans should see. */
+/* The line with any inline note cut off - what math and scans should see. */
 function stripLineComment(s){
   const cs=lineCommentStart(s);
   return cs<0 ? s : s.slice(0,cs);
@@ -2103,14 +2103,18 @@ function regroupText(text, caret){
 
 /* Pad binary math operators with a no-break space on each side so they stand
    out. Only OSP is added (never user characters removed), and it is skipped by
-   the caret bookkeeping, so ordinary prose spacing is untouched. Heading lines
-   (// and #) are left alone; a "-" is only padded next to a number so hyphens
-   in words ("cost-benefit") are not split. */
+   the caret bookkeeping, so ordinary prose spacing is untouched. Heading (#)
+   and note (//) lines are left alone, and so is an inline "//" note tail -
+   "/" is also division, so padding inside it would tear the marker itself
+   apart ("100 //x" -> "100 / /x"). A "-" is only padded next to a number so
+   hyphens in words ("cost-benefit") are not split. */
 function spaceOps(text){
   return text.split('\n').map(line=>{
     const cls=classify(line);
-    if(cls.kind==='super'||cls.kind==='header') return line;   // no op padding in headings
-    return line.slice(0,cls.markerLen)+spaceOpsContent(line.slice(cls.markerLen));
+    if(cls.kind==='super'||cls.kind==='header') return line;   // no op padding in headings/notes
+    const cs=lineCommentStart(line);
+    const end=cs>=cls.markerLen ? cs : line.length;
+    return line.slice(0,cls.markerLen)+spaceOpsContent(line.slice(cls.markerLen,end))+line.slice(end);
   }).join('\n');
 }
 function spaceOpsContent(s){
@@ -2129,6 +2133,7 @@ function spaceOpsContent(s){
       if(nx!=='' && !isFmtWS(nx) && nx!==' ' && nx!=='\t') out+=OSP;
       i++; continue;
     }
+    if(ch==='/' && (s[i+1]==='/' || s[i-1]==='/')){ out+=ch; continue; }   // never tear a "//" note marker apart
     if('+-*/^='.includes(ch)){
       const lc=lastCore(), rc=nextCore(i+1);
       const isPM=(ch==='+'||ch==='-');
@@ -2188,7 +2193,7 @@ function render(){
   //    grouped numbers ("1 800") and padded operators ("euro * наценка") —
   //    which stop word-break:break-all from packing rows uniformly, so long
   //    lines wrap into more rows than predicted and every column below drifts.
-  // a "/тег" or "/13.05" trigger inside a comment must not activate anything
+  // a "/тег" or "/13.05" trigger inside a note must not activate anything
   const textCode=text.split('\n').map(stripLineComment).join('\n');
   const activeTags=activeSpotlightTags(textCode, store.tags);
   const activeDates=activeSpotlightDates(textCode);
@@ -2209,7 +2214,7 @@ function render(){
     // color itself stays on the line number, the text just gets a light tint
     const lcol=lineCols[k];
     if(lcol) tints.push('inset 0 0 0 999px '+hexToRgba(lcol, LINE_TINT_ALPHA));
-    // The "//" heading fill is a plain background rather than an inset tint, but
+    // The "#" heading fill is a plain background rather than an inset tint, but
     // it participates in the same merging: two stacked headings should read as
     // one purple block, not two pinched pills.
     builtRows[k]=built; tintRows[k]=tints;
@@ -2435,6 +2440,52 @@ function scheduleSave(){
   saveTimer=setTimeout(persist,300);
 }
 
+/* ---- markup v2: "#" is a heading, "//" a note ----
+   Until v2 the two markers had the opposite roles ("//" heading, "#" note).
+   A doc saved before the swap carries no `markup` field: its markers are
+   rewritten ONCE and the doc is stamped, so the conversion can never run a
+   second time (a second pass would swap everything straight back). Every doc
+   this build creates is stamped at birth. Like snapStoreColors, the rewrite
+   is deterministic and leaves `updated` alone, so each device converges on
+   the identical text by itself; it runs on load and on every remote
+   snapshot, so a legacy copy still arriving from a device on an older cached
+   build is converted on receipt. The stamp travels inside the doc object,
+   which every sync path (merge, adopt, cloud JSON) carries whole. */
+const MARKUP_V=2;
+/* The pre-v2 inline-comment rule, verbatim, but for "#": only needed to find
+   legacy tails ("x = 100 #note") so they can become "//" notes. */
+function legacyCommentStart(s){
+  if(s.indexOf('#')===-1) return -1;
+  const urls=urlRanges(s);
+  const quotes=[]; const qre=/"[^"\n]*"/g; let qm;
+  while((qm=qre.exec(s))) quotes.push([qm.index, qm.index+qm[0].length]);
+  for(let i=0;i<s.length;i++){
+    if(s[i]!=='#') continue;
+    if(i>0 && !/[ \t\u00a0\u202f]/.test(s[i-1])) continue;
+    if(urls.some(r=>i>=r.start&&i<r.end)) continue;
+    if(quotes.some(([a,b])=>i>a&&i<b)) continue;
+    return i;
+  }
+  return -1;
+}
+function convertLegacyMarkup(text){
+  return text.split('\n').map(line=>{
+    let m;
+    if(!CB_RE.test(line)){   // a checkbox outranked both markers, as it still does
+      if((m=/^(\s*)\/\/(.*)$/.exec(line))) return m[1]+'#'+m[2];   // old heading
+      if((m=/^(\s*)#(.*)$/.exec(line)))     return m[1]+'//'+m[2];  // old comment line
+    }
+    const cs=legacyCommentStart(line);                                // old inline tail
+    return cs<0 ? line : line.slice(0,cs)+'//'+line.slice(cs+1);
+  }).join('\n');
+}
+function migrateDocMarkup(d){
+  if(!d || (d.markup|0)>=MARKUP_V) return;
+  if(typeof d.text==='string') d.text=convertLegacyMarkup(d.text);
+  d.markup=MARKUP_V;
+}
+function migrateStoreMarkup(s){ ((s&&s.docs)||[]).forEach(migrateDocMarkup); }
+
 /* Stock docs use FIXED ids keyed to their role (not a random uid) so that the
    "Задачи"/"Личное" doc seeded independently on two devices is recognized as
    the SAME document by the per-id merge and reconciled — instead of both
@@ -2443,10 +2494,10 @@ function scheduleSave(){
    merge — a freshly-seeded device can never clobber real data. */
 const TASKS_ID='stock-tasks', PERSONAL_ID='stock-personal';
 function makeTasksDoc(){
-  return { id:TASKS_ID, name:'Задачи', protected:'tasks', text:DEFAULT_DOC, lineColors:{}, updated:0 };
+  return { id:TASKS_ID, name:'Задачи', protected:'tasks', text:DEFAULT_DOC, lineColors:{}, updated:0, markup:MARKUP_V };
 }
 function makePersonalDoc(){
-  return { id:PERSONAL_ID, name:'Личное', protected:'personal', text:'', lineColors:{}, updated:0 };
+  return { id:PERSONAL_ID, name:'Личное', protected:'personal', text:'', lineColors:{}, updated:0, markup:MARKUP_V };
 }
 /* Force any protected doc onto its canonical id, so stock docs that were
    created before fixed ids existed (random uid) still merge as one across
@@ -2520,6 +2571,8 @@ function load(){
   // legacy tag/line colours: pull anything picked before the palette closed
   // back onto a base colour (idempotent, see snapStoreColors)
   snapStoreColors(store);
+  // pre-v2 docs: "//" headings / "#" comments become "#" / "//" (once, stamped)
+  migrateStoreMarkup(store);
   // ensure the stock, undeletable documents exist (pinned to top, in order)
   if(!store.docs.some(d=>d.protected==='tasks')){
     const tasks=makeTasksDoc();
@@ -2571,7 +2624,7 @@ function switchDoc(id){
 function createDoc(){
   persist();
   const n=store.docs.length+1;
-  const d={ id:uid(), name:'Документ '+n, text:'', lineColors:{}, updated:stamp() };
+  const d={ id:uid(), name:'Документ '+n, text:'', lineColors:{}, updated:stamp(), markup:MARKUP_V };
   store.docs.push(d);
   store.activeId=d.id;
   loadActiveIntoEditor();
@@ -2902,12 +2955,12 @@ function scrollToMatch(){
 }
 
 const DEFAULT_DOC=
-`// Ремонт кухни
+`# Ремонт кухни
 [ ] купить плитку
 [ ] заказать столешницу
 [x] замерить стены
 
-// Бюджет
+# Бюджет
 плитка = 1200 * 8
 столешница = 45000
 доставка = 3500
@@ -2975,7 +3028,7 @@ function toggleCheckbox(i){
   onChange();
 }
 
-/* ---------- hierarchy auto-indent (subtasks under "//" get an indent) ---------- */
+/* ---------- hierarchy auto-indent (subtasks under "#" get an indent) ---------- */
 const INDENT_UNIT='   ';   // 3 spaces of real indentation (managed by the app)
 function autoIndent(){
   const val=input.value, caret=input.selectionStart;
@@ -2993,7 +3046,7 @@ function autoIndent(){
   const newLines=lines.map(line=>{
     const oi=(line.match(/^[ \t]*/)[0]).length;
     const body=line.slice(oi);
-    const isHeading=/^\/\//.test(body)||/^#/.test(body);
+    const isHeading=/^#/.test(body);   // a "//" note is content, not a heading
     let indent='';
     if(isHeading){ underHeading=true; }
     else if(body==='') { /* blank line: no indent chars, group continues */ }
@@ -3012,7 +3065,7 @@ function autoIndent(){
   input.setSelectionRange(nc,nc);
 }
 
-/* Auto-insert a space after "//" on the caret line ("//text" → "// text"). */
+/* Auto-insert a space after a "//" note marker on the caret line ("//text" → "// text"). */
 function transformSlashSpace(){
   const val=input.value, caret=input.selectionStart;
   const lineStart=caret>0 ? val.lastIndexOf('\n',caret-1)+1 : 0;
@@ -3131,7 +3184,7 @@ function urlRegions(){
 function atomicRegions(){ return pillRegions().concat(urlRegions()); }
 
 /* ---------- variable pills: a successfully-assigned variable name (its
-   definition AND every usage, within its own "//" section) behaves as a
+   definition AND every usage, within its own "#" section) behaves as a
    pill for click-to-copy / whole-name Backspace, but — unlike result pills
    and links — the caret CAN enter it (double-click places the caret inside
    for normal character editing). No background/outline: visually it's
@@ -3142,7 +3195,7 @@ function atomicRegions(){ return pillRegions().concat(urlRegions()); }
 function varPillRangesInLine(row){
   if(!model || !model.data.lines[row]) return [];
   const item=model.data.lines[row];
-  if(item.cls.kind==='header') return [];   // "#" comment: fully inert
+  if(item.cls.kind==='header') return [];   // "//" note: fully inert
   const cmt=lineCommentStart(item.raw);     // inline tail is inert too
   const scope=model.data.scopesBySection[item.section];
   const names=model.data.varsBySection[item.section];
@@ -4795,6 +4848,7 @@ function subscribeCloud(){
    paths behave identically. */
 function reconcileRemote(remote){
   snapStoreColors(remote);   // a device that hasn't migrated yet can still send legacy colours
+  migrateStoreMarkup(remote);   // …and legacy-markup docs
   observeStore(remote);   // advance the logical clock past everything the cloud has seen
   // HARD SAVE from another device: a higher forceEpoch means "make every device
   // exactly this version". Adopt it wholesale, discarding any local divergence
@@ -4877,7 +4931,7 @@ function pushCloudNow(){
   db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
     adopt=null;                          // reset per attempt — the callback re-runs on contention
     const remote=snap.exists?parseRemote(snap.data()):null;
-    if(remote){ snapStoreColors(remote); observeStore(remote); }
+    if(remote){ snapStoreColors(remote); migrateStoreMarkup(remote); observeStore(remote); }
     if(remote && (remote.forceEpoch||0)>(store.forceEpoch||0)){
       adopt={forced:remote}; sent=syncPayload(remote);
       return;                            // a newer hard save stands — adopt it, write nothing
@@ -4936,7 +4990,7 @@ function hardSave(){
   let adopt=null, sent=null;
   db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
     const remote=snap.exists?parseRemote(snap.data()):null;
-    if(remote){ snapStoreColors(remote); observeStore(remote); }
+    if(remote){ snapStoreColors(remote); migrateStoreMarkup(remote); observeStore(remote); }
     const next=remote?mergeStores(store,remote):store;
     next.forceEpoch=Math.max(store.forceEpoch||0, (remote&&remote.forceEpoch)||0, Date.now())+1;
     adopt=next; sent=syncPayload(next);
@@ -5119,6 +5173,7 @@ async function openSharedView(){
   let data=null;
   if(m){ try{ data=JSON.parse(await b64ToText(decodeURIComponent(m[1]))); }catch(e){ data=null; } }
   if(!data || typeof data.t!=='string'){ initAuth(); return; }   // bad link -> normal app
+  if((data.m|0)<MARKUP_V) data.t=convertLegacyMarkup(data.t);       // link made before the "#"/"//" swap
   sharedMode=true;
   hideAuthGate();
   input.value=data.t; input.readOnly=true;
@@ -5131,7 +5186,7 @@ async function openSharedView(){
   $('sb-import').addEventListener('click', ()=>importSharedDoc(data));
 }
 function importSharedDoc(data){
-  const d={ id:uid(), name:data.n||'Присланный документ', text:data.t, lineColors:{}, updated:stamp() };
+  const d={ id:uid(), name:data.n||'Присланный документ', text:data.t, lineColors:{}, updated:stamp(), markup:MARKUP_V };
   store.docs.push(d); store.activeId=d.id;
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
   history.replaceState(null,'',location.pathname);   // drop the #doc= hash
@@ -5139,7 +5194,7 @@ function importSharedDoc(data){
 }
 async function shareLink(){
   const d=doc(); if(!d) return;
-  const payload=JSON.stringify({n:d.name||'Документ', t:input.value});
+  const payload=JSON.stringify({n:d.name||'Документ', t:input.value, m:MARKUP_V});
   const enc=await gzipToB64(payload);
   const base=location.origin+location.pathname;
   const url=base+'#doc='+encodeURIComponent(enc);
@@ -5516,6 +5571,7 @@ window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluate
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
   curCmdAt, lineCurCmd, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
   offsetToLineCol, countNewlines, dateAtIdx,
+  convertLegacyMarkup, migrateStoreMarkup, MARKUP_V,
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); },
   // seam for tests/staletest.js: drive the real cloud write paths against a
   // fake Firestore, so the "stale device must never clobber newer cloud data"

@@ -41,8 +41,8 @@ const EXE = path.join(os.homedir(),
     };
     const out = [];
 
-    const A = '// Раздел\nдоход = 1000\nналог = доход * 13%\nsum\n[ ] задача';
-    const B = '// Другой\nцена = 250\nитого = цена * 4\nдедлайн 15.09';
+    const A = '# Раздел\nдоход = 1000\nналог = доход * 13%\nsum\n[ ] задача';
+    const B = '# Другой\nцена = 250\nитого = цена * 4\nдедлайн 15.09';
 
     input.value = A; fire(); out.push(snap('base'));
 
