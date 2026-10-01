@@ -838,8 +838,12 @@ button{font-family:inherit;color:inherit}
 
 const NBSP = ' ';           // narrow no-break space — visual thousands separator
 const GROUP_RE = new RegExp(NBSP, 'g');
-const OSP  = ' ';      // U+00A0 no-break space — formatter padding (now only around the "()" round marker)
-function isFmtWS(ch){ return ch===NBSP || ch===OSP; }
+const OSP  = ' ';      // U+00A0: padding older builds put around operators / "()"; never inserted any more
+/* Formatter whitespace = characters the app inserts and owns. Only the digit
+   grouping is left, and regroupText() re-derives it from the digits on every
+   pass, so it can never be orphaned. U+00A0 is no longer one: dropPadding()
+   removes old padding and turns any other U+00A0 into a plain space. */
+function isFmtWS(ch){ return ch===NBSP; }
 
 /* ---------- memoized word-boundary regexes ----------
    The tag/variable painters build a lookbehind regex per tag and per variable
@@ -2081,64 +2085,28 @@ function regroupText(text, caret){
   return out;
 }
 
-/* Math operators are NOT padded: "2+2" stays exactly as typed. Older builds
-   padded them with OSP ("2 + 2"), and that padding lives on in saved text, so
-   unpadOps() drops every OSP that touches an operator - only the formatter
-   ever put one there, so this restores exactly what was typed (real spaces
-   the user typed are U+0020 and never touched). The one padding that remains
-   is the "()" round marker's, which is not an operator: an OSP hugging "()"
-   is kept, so unpadding and re-padding agree and the text is stable. Heading
-   (#) and note (//) lines, and an inline "//" note tail, get no "()"
-   padding either. */
-const OP_PAD_RE=new RegExp('(?<!\\(\\))'+OSP+'+(?=[-+*/^=])|(?<=[-+*/^=])'+OSP+'+(?!\\(\\))','g');
-function unpadOps(s){ return s.indexOf(OSP)<0 ? s : s.replace(OP_PAD_RE,''); }
-function spaceOps(text){
-  return text.split('\n').map(line=>{
-    line=unpadOps(line);
-    const cls=classify(line);
-    if(cls.kind==='super'||cls.kind==='header') return line;   // no padding in headings/notes
-    const cs=lineCommentStart(line);
-    const end=cs>=cls.markerLen ? cs : line.length;
-    return line.slice(0,cls.markerLen)+spaceOpsContent(line.slice(cls.markerLen,end))+line.slice(end);
-  }).join('\n');
-}
-/* Pad the "()" round marker with OSP on each side ("1343()" -> "1343 ()"). */
-function spaceOpsContent(s){
-  const n=s.length; let out='';
-  for(let i=0;i<n;i++){
-    const ul=urlLenAt(s,i);
-    if(ul){ out+=s.substr(i,ul); i+=ul-1; continue; }   // never pad inside a URL
-    const ch=s[i];
-    if(ch==='(' && s[i+1]===')'){
-      const lo=out.length?out[out.length-1]:'';
-      if(lo!=='' && !isFmtWS(lo) && lo!==' ' && lo!=='\t') out+=OSP;
-      out+='()';
-      const nx=s[i+2]||'';
-      if(nx!=='' && !isFmtWS(nx) && nx!==' ' && nx!=='\t') out+=OSP;
-      i++; continue;
-    }
-    out+=ch;
-  }
-  return out;
-}
+/* Nothing but the digit grouping is ever inserted: operators and the "()"
+   round marker stay exactly as typed. Older builds padded both with U+00A0,
+   and that padding lives on in saved text. dropPadding() removes it - every
+   U+00A0 touching an operator or "()" - and turns any other U+00A0 (a no-
+   break space typed with Option+Space, or pasted) into a plain space, so the
+   text holds no invisible characters a Backspace could stumble over. */
+const PAD_RE=new RegExp(OSP+'+(?=[-+*/^=]|\\(\\))|(?<=[-+*/^=]|\\(\\))'+OSP+'+','g');
+function dropPadding(s){ return s.indexOf(OSP)<0 ? s : s.replace(PAD_RE,'').replace(/\u00a0/g,' '); }
 
-/* Full format pass: group numbers, dot→comma, then drop old operator padding
-   and pad "()". Both grouping (NBSP) and padding (OSP) are formatter whitespace, so the
+/* Full format pass: group numbers, dot→comma, then drop old padding. Grouping
+   (NBSP) is formatter whitespace, so the
    caret is preserved by counting the core (non-formatter) characters. */
-function formatAll(text, caret){ return spaceOps(regroupText(text, caret)); }
+function formatAll(text, caret){ return dropPadding(regroupText(text, caret)); }
 
 /* Apply masking to the textarea, preserving caret by counting core chars. */
 function applyMask(){
-  let val=input.value;
+  const val=input.value;
   const caret=input.selectionStart;
-  // An empty "()" with the caret inside is a bracket pair being typed (see
-  // autoPair), not the round marker yet: a placeholder inside hides it from
-  // the "()" padding, so "1343(" -> "1343(2)" leaves no stray space behind.
-  const hole=(val[caret-1]==='(' && val[caret]===')');
-  if(hole) val=val.slice(0,caret)+'\uE000'+val.slice(caret);
-  const coreBefore=countNonSep(val, caret);
-  let masked=formatAll(val, caret);
-  if(hole){ masked=masked.replace('\uE000',''); val=input.value; }
+  let coreBefore=countNonSep(val, caret);
+  // legacy padding dropped before the caret no longer counts towards its spot
+  if(val.indexOf(OSP)>=0){ PAD_RE.lastIndex=0; let m; while((m=PAD_RE.exec(val))) coreBefore-=Math.max(0, Math.min(caret, m.index+m[0].length)-m.index); }
+  const masked=formatAll(val, caret);
   if(masked===val) return;
   const newCaret=posAfterNonSep(masked, coreBefore);
   input.value=masked;
@@ -2431,7 +2399,7 @@ function normalizeStoreDocs(s){
     if(!d) return;
     migrateDocMarkup(d);
     // operators are no longer padded: drop old OSP padding
-    if(typeof d.text==='string') d.text=unpadOps(d.text);
+    if(typeof d.text==='string') d.text=dropPadding(d.text);
     // line numbers (and the per-line colours assigned through them) are gone
     delete d.lineColors;
     // a "#" heading always has a space before its title
@@ -3023,8 +2991,10 @@ function autoIndent(){
   input.setSelectionRange(nc,nc);
 }
 
-/* Auto-insert a space after a "//" note marker on the caret line ("//text" → "// text"). */
-function transformSlashSpace(){
+/* Auto-insert a space after a "//" note marker on the caret line ("//text" → "// text").
+   Never on a deletion: the user must be able to backspace that space away. */
+function transformSlashSpace(e){
+  if(e && e.inputType && e.inputType.startsWith('delete')) return;
   const val=input.value, caret=input.selectionStart;
   const lineStart=caret>0 ? val.lastIndexOf('\n',caret-1)+1 : 0;
   let lineEnd=val.indexOf('\n',caret); if(lineEnd<0) lineEnd=val.length;
@@ -3062,7 +3032,7 @@ let composing=false;
 function onInput(e){
   if(composing) return;
   transformSlashTask(e);
-  transformSlashSpace();
+  transformSlashSpace(e);
   transformHashSpace(e);
   autoIndent();
   applyMask();
@@ -3231,12 +3201,43 @@ function snapCaret(){
   for(const [s,e] of atomicRegions()){ if(pos>s && pos<e){ pos=(pos-s<=e-pos)?s:e; break; } }  // never inside a pill/link
   if(pos!==input.selectionStart) input.setSelectionRange(pos,pos);
 }
-/* Start of the previous word from `pos`, not crossing the visual line start. */
+/* Backspace / Delete over what the app inserts itself. The managed indent and
+   the digit grouping are not text the user typed, so deleting must never stop
+   on them (the formatter would just put them back) nor drag them along:
+   - Backspace at a line's content start merges it into the line above and
+     takes the line's indent with it; elsewhere it deletes one real character
+     (or word), stepping over any grouping space in between;
+   - Delete at a line end joins the next line and drops that line's indent
+     (the mirror of the merge above); right before a grouping space it steps
+     over it and deletes the digit behind it.
+   Shared by the keydown handler and soft keyboards' beforeinput; returns
+   true when it handled the key. */
+function smartBackspace(word){
+  const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos), v=input.value;
+  if(pos<=contentStart && lineStart>0){ commitValue(v.slice(0,lineStart-1)+v.slice(contentStart), lineStart-1); return true; }
+  if(pos<=contentStart) return false;
+  const from=clampFromPill(word ? prevWordStart(v,pos,contentStart) : prevCharStart(v,pos,contentStart));
+  commitValue(v.slice(0,from)+v.slice(pos), from);
+  return true;
+}
+function smartDelete(){
+  const v=input.value, pos=input.selectionStart;
+  if(v[pos]==='\n'){ const {contentStart}=lineBounds(pos+1); commitValue(v.slice(0,pos)+v.slice(contentStart), pos); return true; }
+  if(isFmtWS(v[pos])){
+    let to=pos; while(to<v.length && isFmtWS(v[to])) to++;
+    if(to<v.length && v[to]!=='\n') to++;
+    commitValue(v.slice(0,pos)+v.slice(to), pos);
+    return true;
+  }
+  return false;                                       // a plain character: the browser's own delete is fine
+}
+/* Start of the previous word from `pos`, not crossing the visual line start.
+   A grouped number ("12 345") is one word: grouping between digits is part of it. */
 function prevWordStart(s, pos, floor){
   let i=pos;
   while(i>floor && /\s/.test(s[i-1])) i--;                 // skip trailing spaces
   if(i>floor){
-    if(/[\p{L}\p{N}_]/u.test(s[i-1])) while(i>floor && /[\p{L}\p{N}_]/u.test(s[i-1])) i--;
+    if(/[\p{L}\p{N}_]/u.test(s[i-1])) while(i>floor && (/[\p{L}\p{N}_]/u.test(s[i-1]) || (isFmtWS(s[i-1]) && /\p{N}/u.test(s[i-2]||'')))) i--;
     else while(i>floor && !/[\p{L}\p{N}_\s]/u.test(s[i-1])) i--;   // run of punctuation/operators
   }
   return i;
@@ -3378,25 +3379,8 @@ function onEditorKeydown(e){
     commitValue(v.slice(0,pos-1)+v.slice(pos+1), pos-1);
     return;
   }
-  if(e.key==='Backspace' && !e.shiftKey && collapsed){
-    const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos);
-    if(pos<=contentStart && lineStart>0){          // at (visual) line start → merge up
-      e.preventDefault();
-      const v=input.value;
-      commitValue(v.slice(0,lineStart-1)+v.slice(contentStart), lineStart-1);
-      return;
-    }
-    if(pos>contentStart){
-      e.preventDefault();
-      // standard keyboard behavior: plain Backspace deletes one char; Ctrl/Alt+Backspace deletes a word
-      const v=input.value;
-      let from=(e.ctrlKey||e.altKey||e.metaKey) ? prevWordStart(v,pos,contentStart)
-                                                : prevCharStart(v,pos,contentStart);
-      from=clampFromPill(from);
-      commitValue(v.slice(0,from)+v.slice(pos), from);
-      return;
-    }
-  }
+  if(e.key==='Backspace' && !e.shiftKey && collapsed && smartBackspace(e.ctrlKey||e.altKey||e.metaKey)){ e.preventDefault(); return; }
+  if(e.key==='Delete' && !e.shiftKey && collapsed && !(e.ctrlKey||e.altKey||e.metaKey) && smartDelete()){ e.preventDefault(); return; }
   if(e.key==='ArrowLeft' && !e.shiftKey && collapsed){
     const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos);
     if(pos<=contentStart && lineStart>0){ e.preventDefault(); input.setSelectionRange(lineStart-1,lineStart-1); return; }
@@ -3441,13 +3425,16 @@ const PAIR_CLOSE={'(':')','[':']','{':'}','«':'»','"':'"',"'":"'"};
 const PAIR_CLOSERS=new Set([')',']','}','»','"',"'"]);
 function isEmptyPairAt(v, pos){ const o=v[pos-1]; return !!PAIR_CLOSE[o] && v[pos]===PAIR_CLOSE[o]; }
 function autoPair(e){
+  if(!e.cancelable) return false;                     // can't stop the browser's own edit: leave it alone
   const v=input.value, s=input.selectionStart, en=input.selectionEnd;
+  // Soft keyboards (Android) send no usable keydown, so Backspace / Delete
+  // arrive only here: route them through the same logic as the keyboard.
   if(e.inputType==='deleteContentBackward'){
-    if(s!==en || !isEmptyPairAt(v,s)) return false;
-    input.value=v.slice(0,s-1)+v.slice(s+1); input.setSelectionRange(s-1,s-1);
-    onInput({inputType:'deleteContentBackward'});
-    return true;
+    if(s!==en) return false;
+    if(isEmptyPairAt(v,s)){ commitValue(v.slice(0,s-1)+v.slice(s+1), s-1); return true; }
+    return smartBackspace(false);
   }
+  if(e.inputType==='deleteContentForward'){ return s===en && smartDelete(); }
   if(e.inputType!=='insertText' || !e.data || e.data.length!==1) return false;
   const ch=e.data, close=PAIR_CLOSE[ch];
   if(s!==en){
@@ -3460,13 +3447,7 @@ function autoPair(e){
     if(at>=0 && at<=s+2) input.setSelectionRange(at+1, at+1+sel.length);
     return true;
   }
-  if(PAIR_CLOSERS.has(ch) && v[s]===ch){                                                  // type over the closer
-    input.setSelectionRange(s+1,s+1);
-    // stepping out of an empty "()" turns it into the round marker: let the
-    // formatter pad it now (no text was typed, so only re-save if it changed)
-    const before=input.value; applyMask(); if(input.value!==before) onChange();
-    return true;
-  }
+  if(PAIR_CLOSERS.has(ch) && v[s]===ch){ input.setSelectionRange(s+1,s+1); return true; }   // type over the closer
   if(!close) return false;
   const next=v[s]||'', prev=v[s-1]||'';
   if(next && !/[\s)\]}»"',.;:]/.test(next)) return false;
