@@ -468,6 +468,8 @@ button{font-family:inherit;color:inherit}
 #highlight .date{color:var(--date);font-weight:500}
 #highlight .label{color:var(--label);font-weight:500}
 #highlight .quote{color:var(--super)}
+#highlight .b{font-weight:700}                       /* "**bold**" run (Ctrl+B) */
+#highlight .bmark{color:var(--dim)!important;opacity:.45;font-weight:400}   /* its "**" markers, faint */
 #highlight .super{color:var(--super);font-weight:700}   /* "#" heading: bold (mono bold keeps the advance, so the overlay stays aligned) */
 #highlight .header{color:var(--comment)}
 #highlight .cur{color:var(--cur);font-weight:600}   /* "/usd" "/euro" "/yuan" currency command */
@@ -1311,6 +1313,15 @@ const CB_RE   = /^(\s*)\[([ xX])\]\s?/;     // checkbox marker
 const SUPER_RE= /^(\s*)#\s?/;               // supertask heading #
 const HEADER_RE=/^(\s*)\/\/\s?/;            // note //  (kind 'header' is historical: it is the inert note)
 
+/* Bold: "**текст**" (Ctrl/Cmd+B toggles it). The markers are ordinary
+   characters, and "*" is multiplication, so math must never see them: each
+   marker of a bold run is replaced by two spaces, which keeps every offset
+   (calcRange, pills, highlighting) identical to the raw line. Like Markdown,
+   a run needs non-space just inside both markers ("** x**" is not bold);
+   "****" is an empty run - what Ctrl+B leaves to type into. */
+const BOLD_RE=/\*\*(?!\s)(.*?)(?<!\s)\*\*/g;
+function unboldForMath(line){ return line.indexOf('**')<0 ? line : line.replace(BOLD_RE, (m,inner)=>'  '+inner+'  '); }
+
 function classify(line){
   let m;
   if((m=CB_RE.exec(line)))    return {kind:'checkbox', checked:/x/i.test(m[2]), markerLen:m[0].length, indent:m[1].length};
@@ -1441,8 +1452,9 @@ function applyRoundMarker(v){ return Math.ceil(v/10)*10; }
    within that section), so the same name can hold a different value in
    parallel under a different heading. */
 function analyze(text){
-  const lines=text.split('\n');
-  const secOf=computeSections(lines);
+  const rawLines=text.split('\n');
+  const lines=rawLines.map(unboldForMath);   // what math, assignments and scans read
+  const secOf=computeSections(rawLines);
   const {heads, consumed}=computeAssignments(lines);
   const varsBySection=collectVarsBySection(lines, secOf, heads);
   const scopesBySection={};
@@ -1453,14 +1465,14 @@ function analyze(text){
   const out=[];
 
   lines.forEach((line, idx)=>{
-    const cls=classify(line);
+    const cls=classify(rawLines[idx]);
     const sec=secOf[idx];
     const content=line.slice(cls.markerLen);
     // A line folded into a preceding multi-line assignment's RHS (an expression
     // that kept going after "имя =" via single Enters) doesn't compute or
     // aggregate on its own — it only renders, with its numbers still lit.
     if(consumed.has(idx)){
-      out.push({raw:line, cls, content, result:null, assignedName:null, calcRange:null, error:false, dateCount:false, currency:null, section:sec, contLine:true});
+      out.push({raw:rawLines[idx], cls, content, result:null, assignedName:null, calcRange:null, error:false, dateCount:false, currency:null, section:sec, contLine:true});
       return;
     }
     const vars=varsBySection[sec] || (varsBySection[sec]=new Set());
@@ -1547,7 +1559,7 @@ function analyze(text){
       ctx.prev=result;
     }
 
-    out.push({raw:line, cls, content, result, assignedName, calcRange, error, dateCount, rateCmd, section:sec});
+    out.push({raw:rawLines[idx], cls, content, result, assignedName, calcRange, error, dateCount, rateCmd, section:sec});
   });
 
   return {lines:out, varsBySection, varDefLineBySection, scopesBySection};
@@ -1590,7 +1602,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const cr = item.calcRange;
   const inCalc = k => !cr || (k>=cr[0] && k<cr[1]);
   // char-class array; higher priority overrides
-  const P={base:0, num:1, date:2, op:3, label:4, quote:5, cur:5.5, tag:6, varr:7, link:8, doclink:9, cmt:10};
+  const P={base:0, num:1, date:2, op:3, label:4, quote:5, cur:5.5, tag:6, varr:7, link:8, doclink:9, cmt:10, bmark:11};
   const cclass=new Array(len).fill('');   // css class per char
   const cmeta =new Array(len).fill(null); // {type, defLine} for hover
   const prio  =new Array(len).fill(-1);
@@ -1816,6 +1828,19 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     }
   }
 
+  // ---- bold "**…**": the run's text is bold on top of whatever colour it
+  //      has; the markers stay (they're real characters) but are drawn faint ----
+  const bold=new Array(len).fill(false);
+  if(raw.indexOf('**')>=0){
+    BOLD_RE.lastIndex=0; let bm;
+    while((bm=BOLD_RE.exec(raw))){
+      const a=bm.index, z=a+bm[0].length;
+      if(a<bodyStart) continue;
+      paint(a,a+2,'bmark',P.bmark); paint(z-2,z,'bmark',P.bmark);
+      for(let q=a+2;q<z-2;q++) bold[q]=true;
+    }
+  }
+
   // ---- checkbox marker: render the LITERAL "[ ]"/"[x]" so column widths
   //      stay identical to the textarea. The bracket may be preceded by
   //      hierarchy indent, so anchor it at cls.indent, not at 0. ----
@@ -1832,11 +1857,11 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   let bodyHTML='';
   let k=bodyStart;
   while(k<len){
-    const cl=cclass[k], col=color[k], pl=pill[k];
+    const cl=cclass[k], col=color[k], pl=pill[k], bd=bold[k];
     let j=k+1;
-    while(j<len && cclass[j]===cl && color[j]===col && pill[j]===pl) j++;
+    while(j<len && cclass[j]===cl && color[j]===col && pill[j]===pl && bold[j]===bd) j++;
     const chunk=esc(raw.slice(k,j));
-    const cls2=(cl||(cls.kind==='text'?'sub':''))+(pl?' rpill':'');
+    const cls2=(cl||(cls.kind==='text'?'sub':''))+(pl?' rpill':'')+(bd?' b':'');
     const style=col? ' style="color:'+col+'"' : '';
     bodyHTML+= cls2 ? '<span class="'+cls2.trim()+'"'+style+'>'+chunk+'</span>' : '<span>'+chunk+'</span>';
     k=j;
@@ -3341,6 +3366,8 @@ function onEditorKeydown(e){
   if(mod && (e.key==='y'||e.key==='Y' || e.key==='н'||e.key==='Н')){ e.preventDefault(); doRedo(); return; }
   // find bar
   if(mod && (e.key==='f'||e.key==='F' || e.key==='а'||e.key==='А')){ e.preventDefault(); openFind(); return; }
+  // bold (any layout: the physical B key)
+  if(mod && !e.altKey && (e.code==='KeyB' || e.key==='b'||e.key==='B'||e.key==='и'||e.key==='И')){ e.preventDefault(); toggleBold(); return; }
 
   const collapsed=input.selectionStart===input.selectionEnd;
 
@@ -3389,6 +3416,55 @@ function onEditorKeydown(e){
     const {contentStart}=lineBounds(input.selectionStart);
     e.preventDefault(); input.setSelectionRange(contentStart,contentStart); return;
   }
+}
+
+/* ---------- Ctrl/Cmd+B: toggle bold, like a text editor ----------
+   With a selection: if it is already bold (markers just outside it, or the
+   selection includes them) the markers are removed; otherwise each selected
+   line's text (trimmed - "** x**" wouldn't be bold) is wrapped in "**…**".
+   The text stays selected either way.
+   Without a selection, inside a bold run: at its end the caret steps out past
+   the closing "**" (stop typing bold); in an empty "****" the pair is removed;
+   anywhere else in the run, the run is un-bolded. Outside bold: "****" is
+   inserted with the caret in the middle, so what is typed next is bold.
+   Every change goes through commitValue, so one Ctrl+Z undoes it. */
+function toggleBold(){
+  const v=input.value, s=input.selectionStart, e=input.selectionEnd;
+  const select=(a,b)=>{ const n=input.value.length; input.setSelectionRange(Math.min(a,n), Math.min(b,n)); };
+  if(s===e){
+    const ls=v.lastIndexOf('\n', s-1)+1; let le=v.indexOf('\n', s); if(le<0) le=v.length;
+    const line=v.slice(ls,le), col=s-ls;
+    BOLD_RE.lastIndex=0; let m;
+    while((m=BOLD_RE.exec(line))){
+      const a=m.index, z=a+m[0].length;
+      if(col<a+2 || col>z-2) continue;                                        // caret not inside this run
+      if(m[1]===''){ commitValue(v.slice(0,ls+a)+v.slice(ls+z), ls+a); return; }    // empty "****": drop it
+      if(col===z-2){ input.setSelectionRange(ls+z, ls+z); return; }               // at its end: step out
+      commitValue(v.slice(0,ls+a)+m[1]+v.slice(ls+z), s-2); return;              // inside: un-bold the run
+    }
+    commitValue(v.slice(0,s)+'****'+v.slice(s), s+2);
+    return;
+  }
+  const sel=v.slice(s,e);
+  if(!sel.includes('\n') && v.slice(s-2,s)==='**' && v.slice(e,e+2)==='**'){      // markers just outside
+    commitValue(v.slice(0,s-2)+sel+v.slice(e+2), s-2); select(s-2, e-2); return;
+  }
+  if(!sel.includes('\n') && sel.length>=4 && sel.startsWith('**') && sel.endsWith('**')){   // markers selected too
+    commitValue(v.slice(0,s)+sel.slice(2,-2)+v.slice(e), s); select(s, e-4); return;
+  }
+  const parts=sel.split('\n');
+  const BOLD_PART=/^(\s*)\*\*(?!\s)(.*?)(?<!\s)\*\*(\s*)$/;
+  if(parts.length>1 && parts.some(p=>p.trim()) && parts.every(p=>!p.trim() || BOLD_PART.test(p))){   // every line already bold
+    const un=parts.map(p=>p.replace(BOLD_PART,'$1$2$3')).join('\n');
+    commitValue(v.slice(0,s)+un+v.slice(e), s); select(s, s+un.length); return;
+  }
+  const wrapped=parts.map(part=>{
+    const m=/^(\s*)(.*?)(\s*)$/.exec(part);
+    return m[2] ? m[1]+'**'+m[2]+'**'+m[3] : part;
+  }).join('\n');
+  commitValue(v.slice(0,s)+wrapped+v.slice(e), s);
+  if(parts.length===1){ const lead=/^\s*/.exec(sel)[0].length, core=sel.trim().length; select(s+lead+2, s+lead+2+core); }   // keep the TEXT selected
+  else select(s, s+wrapped.length);
 }
 
 /* ---------- undo / redo (native history is lost to programmatic formatting) ---------- */
@@ -4979,7 +5055,7 @@ function exportStyleBlock(){
     .num{color:${c('--num')}} .op{color:${c('--op')}} .opx{color:${c('--op-work')};font-weight:600}
     .brk0{color:${c('--brk0')};font-weight:600} .brk1{color:${c('--brk1')};font-weight:600} .brk2{color:${c('--brk2')};font-weight:600}
     .date{color:${c('--date')};font-weight:500} .label{color:${c('--label')};font-weight:500}
-    .quote{color:${c('--super')}} .super{color:${c('--super')};font-weight:700} .header{color:${c('--comment')}}
+    .quote{color:${c('--super')}} .super{color:${c('--super')};font-weight:700} .b{font-weight:700} .bmark{display:none} .header{color:${c('--comment')}}
     .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--cbox')};font-weight:600}
     .varu{background:${c('--pill-hover-bg')};border-radius:5px;padding:0 2px}
     td.lcell.superrow{background:${c('--super-soft')};border-radius:5px}
