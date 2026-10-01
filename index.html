@@ -532,6 +532,8 @@ button{font-family:inherit;color:inherit}
    at column 0, right under the "#", and their glyphs must paint over it. */
 #sectionlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
 .sec-rail{position:absolute;width:1px;background:var(--dim);opacity:.5}
+/* horizontal divider above each "#" section (see renderRails): full text width, quiet */
+.sec-divider{position:absolute;left:16px;right:16px;height:1px;background:var(--dim-2);opacity:.8}
 
 /* custom rounded text-selection overlay (behind the highlighted text) */
 #sellayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
@@ -3959,6 +3961,20 @@ function renderRails(force){
       rails+='<div class="sec-rail" data-i="'+k+'" style="top:'+top+'px;height:'+(bottom-top)+'px;left:'+left+'px"></div>';
     }
     k=j-1;
+  }
+  // Section dividers: a thin horizontal line above every "#" heading that has
+  // something above it - in the middle of the blank gap between the last
+  // content above (text, or the caret's row while typing there) and the
+  // heading, or right on the boundary when there is no gap. So it never
+  // crosses text, the caret or a rail. Two headings in a row form one purple
+  // block and get none between them.
+  for(let k=1;k<n;k++){
+    if(L[k].cls.kind!=='super') continue;
+    let r=k-1; while(r>=0 && !L[r].raw.trim() && r!==caretRow) r--;
+    if(r<0 || (r===k-1 && L[r].cls.kind==='super')) continue;
+    const gapTop=(lineRowTop[r]+lineRowCount[r])*LH + 14, gapBottom=lineRowTop[k]*LH + 14;
+    const y=Math.round(gapBottom-gapTop>=LH ? (gapTop+gapBottom)/2 : gapBottom-1);
+    rails+='<div class="sec-divider" data-i="'+k+'" style="top:'+y+'px"></div>';
   }
   if(rails!==prevRailHTML){ sectionlayer.innerHTML=rails; prevRailHTML=rails; }
 }
