@@ -458,7 +458,7 @@ button{font-family:inherit;color:inherit}
 #highlight .date{color:var(--date);font-weight:500}
 #highlight .label{color:var(--label);font-weight:500}
 #highlight .quote{color:var(--super)}
-#highlight .super{color:var(--super)}
+#highlight .super{color:var(--super);font-weight:700}   /* "#" heading: bold (mono bold keeps the advance, so the overlay stays aligned) */
 #highlight .header{color:var(--comment)}
 #highlight .cur{color:var(--cur);font-weight:600}   /* "/usd" "/euro" "/yuan" currency command */
 #highlight .var{color:var(--var);font-weight:500}
@@ -4878,7 +4878,7 @@ function exportStyleBlock(){
     .num{color:${c('--num')}} .op{color:${c('--op')}} .opx{color:${c('--op-work')};font-weight:600}
     .brk0{color:${c('--brk0')};font-weight:600} .brk1{color:${c('--brk1')};font-weight:600} .brk2{color:${c('--brk2')};font-weight:600}
     .date{color:${c('--date')};font-weight:500} .label{color:${c('--label')};font-weight:500}
-    .quote{color:${c('--super')}} .super{color:${c('--super')}} .header{color:${c('--comment')}}
+    .quote{color:${c('--super')}} .super{color:${c('--super')};font-weight:700} .header{color:${c('--comment')}}
     .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--cbox')};font-weight:600}
     .varu{background:${c('--pill-hover-bg')};border-radius:5px;padding:0 2px}
     td.lcell.superrow{background:${c('--super-soft')};border-radius:5px}
