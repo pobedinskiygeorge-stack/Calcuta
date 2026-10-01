@@ -515,13 +515,13 @@ button{font-family:inherit;color:inherit}
 .search-mark{position:absolute;height:var(--lh);background:var(--search-mark);border-radius:3px}
 .search-mark.active{background:var(--search-mark-active);box-shadow:0 0 0 1px var(--date)}
 
-/* "#" section rail: a thin purple bar in the editor's left padding running
-   from a heading down to the last written line of its section, so the block
-   a heading owns reads at a glance. It lives in the padding, never in the
-   text area: the wrapped rows of an indented line restart at column 0, so a
-   rail drawn in the indent would run straight through their glyphs. */
+/* "#" section rail: a thin gray guide that drops from under a heading's "#"
+   and runs down the whole section - blank lines included - to the next
+   heading or the end of the document, like an indent guide in a code editor.
+   It sits BEHIND the text layer: the wrapped rows of an indented line restart
+   at column 0, right under the "#", and their glyphs must paint over it. */
 #sectionlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
-.sec-rail{position:absolute;left:6px;width:3px;border-radius:2px;background:var(--super);opacity:.55}
+.sec-rail{position:absolute;width:1px;background:var(--dim);opacity:.5}
 
 /* custom rounded text-selection overlay (behind the highlighted text) */
 #sellayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
@@ -2289,20 +2289,22 @@ function render(){
   // enough to skip the rebuild entirely on the overwhelming majority of edits.
   if(hs!==prevHsHTML){ hotspots.innerHTML=hs; prevHsHTML=hs; }
 
-  // "#" section rails: a heading covers everything down to the last non-blank
-  // line before the next heading (trailing blank lines are not "under" it);
-  // a heading with nothing written under it gets no rail. One pass over the
-  // lines in total - each line is visited by exactly one heading's scan. The
-  // small inset keeps the rails of back-to-back sections visibly separate.
+  // "#" section rails: from just under a heading's "#" down through every
+  // line of its section - blank ones too, so the rail grows as Enter adds
+  // lines - to the line before the next heading or the end of the document.
+  // A heading followed directly by another heading has nothing under it and
+  // gets no rail. One pass in total: each line is visited by one heading's
+  // scan. x = middle of the "#" glyph (headings are never indented).
   let rails='';
   for(let k=0;k<n;k++){
     if(A.lines[k].cls.kind!=='super') continue;
-    let last=k, j=k+1;
-    for(;j<n && A.lines[j].cls.kind!=='super';j++) if(A.lines[j].raw.trim()) last=j;
+    let j=k+1; while(j<n && A.lines[j].cls.kind!=='super') j++;
+    const last=j-1;
     if(last>k){
-      const top=lineRowTop[k]*LH + 14 + 4;                               // + padY + inset
-      const bottom=(lineRowTop[last]+lineRowCount[last])*LH + 14 - 4;
-      rails+='<div class="sec-rail" data-i="'+k+'" style="top:'+top+'px;height:'+(bottom-top)+'px"></div>';
+      const top=(lineRowTop[k]+lineRowCount[k])*LH + 14 + 2;              // under the heading row (+ padY)
+      const bottom=(lineRowTop[last]+lineRowCount[last])*LH + 14 - 3;    // small gap before the next heading
+      const left=Math.round(16 + charW/2);                               // padX + half a glyph
+      rails+='<div class="sec-rail" data-i="'+k+'" style="top:'+top+'px;height:'+(bottom-top)+'px;left:'+left+'px"></div>';
     }
     k=j-1;
   }
