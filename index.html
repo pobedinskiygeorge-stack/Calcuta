@@ -515,6 +515,14 @@ button{font-family:inherit;color:inherit}
 .search-mark{position:absolute;height:var(--lh);background:var(--search-mark);border-radius:3px}
 .search-mark.active{background:var(--search-mark-active);box-shadow:0 0 0 1px var(--date)}
 
+/* "#" section rail: a thin purple bar in the editor's left padding running
+   from a heading down to the last written line of its section, so the block
+   a heading owns reads at a glance. It lives in the padding, never in the
+   text area: the wrapped rows of an indented line restart at column 0, so a
+   rail drawn in the indent would run straight through their glyphs. */
+#sectionlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
+.sec-rail{position:absolute;left:6px;width:3px;border-radius:2px;background:var(--super);opacity:.55}
+
 /* custom rounded text-selection overlay (behind the highlighted text) */
 #sellayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
 .sel-rect{position:absolute;height:var(--lh);background:var(--sel);border-radius:7px}
@@ -773,6 +781,7 @@ button{font-family:inherit;color:inherit}
     <div id="editor">
       <div id="stack">
         <div id="searchlayer"></div>
+        <div id="sectionlayer"></div>
         <div id="sellayer"></div>
         <div id="pillhover"></div>
         <div id="brackethover"></div>
@@ -1950,7 +1959,7 @@ const input=$('input'), highlight=$('highlight'),
       stack=$('stack'), editor=$('editor'),
       linemenu=$('linemenu'), docmenu=$('docmenu'), toast=$('toast'),
       searchlayer=$('searchlayer'), sellayer=$('sellayer'), pillhover=$('pillhover'), caretlayer=$('caretlayer'),
-      brackethover=$('brackethover');
+      brackethover=$('brackethover'), sectionlayer=$('sectionlayer');
 
 const STORE_KEY='calcuta.v2';
 /* Multi-document store. Tags are shared across documents; text and name
@@ -1981,7 +1990,7 @@ let lineRowTop=[], lineRowCount=[];   // per-source-line cumulative offset / row
    a stale row is impossible by construction. Input-keyed memoization would
    instead have ~11 inputs to remember, and forgetting one paints silently
    stale output. */
-let prevHlSig=[], prevResSig=[], prevHsHTML='';
+let prevHlSig=[], prevResSig=[], prevHsHTML='', prevRailHTML='';
 /* A wrapped line's height depends on its own content and the container width,
    not on its index — so heights only need re-measuring for lines whose content
    changed, plus everything when the geometry itself changed. Anything that
@@ -2279,6 +2288,25 @@ function render(){
   // Hotspots are sparse (checkbox lines only), so a single string compare is
   // enough to skip the rebuild entirely on the overwhelming majority of edits.
   if(hs!==prevHsHTML){ hotspots.innerHTML=hs; prevHsHTML=hs; }
+
+  // "#" section rails: a heading covers everything down to the last non-blank
+  // line before the next heading (trailing blank lines are not "under" it);
+  // a heading with nothing written under it gets no rail. One pass over the
+  // lines in total - each line is visited by exactly one heading's scan. The
+  // small inset keeps the rails of back-to-back sections visibly separate.
+  let rails='';
+  for(let k=0;k<n;k++){
+    if(A.lines[k].cls.kind!=='super') continue;
+    let last=k, j=k+1;
+    for(;j<n && A.lines[j].cls.kind!=='super';j++) if(A.lines[j].raw.trim()) last=j;
+    if(last>k){
+      const top=lineRowTop[k]*LH + 14 + 4;                               // + padY + inset
+      const bottom=(lineRowTop[last]+lineRowCount[last])*LH + 14 - 4;
+      rails+='<div class="sec-rail" data-i="'+k+'" style="top:'+top+'px;height:'+(bottom-top)+'px"></div>';
+    }
+    k=j-1;
+  }
+  if(rails!==prevRailHTML){ sectionlayer.innerHTML=rails; prevRailHTML=rails; }
   // Results: one node per line, replaced only where the rendered string moved.
   const resEls=results.children;
   while(resEls.length>n) results.removeChild(results.lastChild);
