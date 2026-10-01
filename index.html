@@ -856,7 +856,7 @@ button{font-family:inherit;color:inherit}
 
 const NBSP = ' ';           // narrow no-break space — visual thousands separator
 const GROUP_RE = new RegExp(NBSP, 'g');
-const OSP  = ' ';      // U+00A0 no-break space — visual padding around operators
+const OSP  = ' ';      // U+00A0 no-break space — formatter padding (now only around the "()" round marker)
 function isFmtWS(ch){ return ch===NBSP || ch===OSP; }
 
 /* ---------- memoized word-boundary regexes ----------
@@ -1153,8 +1153,8 @@ function matchVarAt(text, i, varNames){
    like matchVarAt). Returns the matched length (consumed chars) or 0.
    Exists so a tag whose label collides with a variable name never gets
    tokenized as real division ("1000 /budget" must not compute 1000/budget).
-   Mirrors activeSpotlightTags' OSP handling: the operator-padding formatter
-   masks a glued number ("1000/tag") by inserting OSP right before "/", so
+   Mirrors activeSpotlightTags' OSP handling: older builds' operator padding
+   masked a glued number ("1000/tag") by inserting OSP right before "/", so
    that must be rejected as a word boundary here (it's a fake one); an OSP
    right after "/" is just padding noise around a real trigger and is
    optionally consumed instead of counted as part of the label gap. */
@@ -1916,8 +1916,8 @@ function stripLineComment(s){
 /* Which tags have a "/tagname" spotlight trigger present anywhere in the
    document — computed once per render, feeds buildLineHTML's per-line
    spotlight check. Returns a Set of lowercased labels.
-   The operator-padding formatter (spaceOpsContent) treats a digit-adjacent
-   "/" as division and pads it with OSP — inserting OSP right before "/" when
+   Older builds' operator padding treated a digit-adjacent
+   "/" as division and padded it with OSP — inserting OSP right before "/" when
    it was glued to a number ("1000/tag") and always right after "/" whenever
    it pads at all (even "1000 /tag", a real space before "/"). So: an OSP
    directly before "/" means the formatter masked a glued number (reject —
@@ -2101,31 +2101,35 @@ function regroupText(text, caret){
   return out;
 }
 
-/* Pad binary math operators with a no-break space on each side so they stand
-   out. Only OSP is added (never user characters removed), and it is skipped by
-   the caret bookkeeping, so ordinary prose spacing is untouched. Heading (#)
-   and note (//) lines are left alone, and so is an inline "//" note tail -
-   "/" is also division, so padding inside it would tear the marker itself
-   apart ("100 //x" -> "100 / /x"). A "-" is only padded next to a number so
-   hyphens in words ("cost-benefit") are not split. */
+/* Math operators are NOT padded: "2+2" stays exactly as typed. Older builds
+   padded them with OSP ("2 + 2"), and that padding lives on in saved text, so
+   unpadOps() drops every OSP that touches an operator - only the formatter
+   ever put one there, so this restores exactly what was typed (real spaces
+   the user typed are U+0020 and never touched). The one padding that remains
+   is the "()" round marker's, which is not an operator: an OSP hugging "()"
+   is kept, so unpadding and re-padding agree and the text is stable. Heading
+   (#) and note (//) lines, and an inline "//" note tail, get no "()"
+   padding either. */
+const OP_PAD_RE=new RegExp('(?<!\\(\\))'+OSP+'+(?=[-+*/^=])|(?<=[-+*/^=])'+OSP+'+(?!\\(\\))','g');
+function unpadOps(s){ return s.indexOf(OSP)<0 ? s : s.replace(OP_PAD_RE,''); }
 function spaceOps(text){
   return text.split('\n').map(line=>{
+    line=unpadOps(line);
     const cls=classify(line);
-    if(cls.kind==='super'||cls.kind==='header') return line;   // no op padding in headings/notes
+    if(cls.kind==='super'||cls.kind==='header') return line;   // no padding in headings/notes
     const cs=lineCommentStart(line);
     const end=cs>=cls.markerLen ? cs : line.length;
     return line.slice(0,cls.markerLen)+spaceOpsContent(line.slice(cls.markerLen,end))+line.slice(end);
   }).join('\n');
 }
+/* Pad the "()" round marker with OSP on each side ("1343()" -> "1343 ()"). */
 function spaceOpsContent(s){
   const n=s.length; let out='';
-  const lastCore=()=>{ for(let k=out.length-1;k>=0;k--){ const c=out[k]; if(isCore(c)&&c!==' '&&c!=='\t') return c; } return ''; };
-  const nextCore=(from)=>{ for(let k=from;k<n;k++){ const c=s[k]; if(isCore(c)&&c!==' '&&c!=='\t') return c; } return ''; };
   for(let i=0;i<n;i++){
     const ul=urlLenAt(s,i);
-    if(ul){ out+=s.substr(i,ul); i+=ul-1; continue; }   // never pad operators inside a URL
+    if(ul){ out+=s.substr(i,ul); i+=ul-1; continue; }   // never pad inside a URL
     const ch=s[i];
-    if(ch==='(' && s[i+1]===')'){                       // "()" round-marker: pad like an operator
+    if(ch==='(' && s[i+1]===')'){
       const lo=out.length?out[out.length-1]:'';
       if(lo!=='' && !isFmtWS(lo) && lo!==' ' && lo!=='\t') out+=OSP;
       out+='()';
@@ -2133,29 +2137,13 @@ function spaceOpsContent(s){
       if(nx!=='' && !isFmtWS(nx) && nx!==' ' && nx!=='\t') out+=OSP;
       i++; continue;
     }
-    if(ch==='/' && (s[i+1]==='/' || s[i-1]==='/')){ out+=ch; continue; }   // never tear a "//" note marker apart
-    if('+-*/^='.includes(ch)){
-      const lc=lastCore(), rc=nextCore(i+1);
-      const isPM=(ch==='+'||ch==='-');
-      if(isPM && !/[\d)\p{L}%]/u.test(lc)){ out+=ch; continue; }   // unary +/- → attach
-      const digitAdj=/\d/.test(lc)||/\d/.test(rc);
-      const always=(ch==='*'||ch==='^'||ch==='=');
-      if(always || digitAdj){
-        const lo=out.length?out[out.length-1]:'';
-        if(lo!=='' && !isFmtWS(lo) && lo!==' ' && lo!=='\t') out+=OSP;
-        out+=ch;
-        const nx=s[i+1]||'';
-        if(nx!=='' && !isFmtWS(nx) && nx!==' ' && nx!=='\t') out+=OSP;
-        continue;
-      }
-    }
     out+=ch;
   }
   return out;
 }
 
-/* Full format pass: group numbers, dot→comma, then pad operators. Both
-   grouping (NBSP) and operator padding (OSP) are formatter whitespace, so the
+/* Full format pass: group numbers, dot→comma, then drop old operator padding
+   and pad "()". Both grouping (NBSP) and padding (OSP) are formatter whitespace, so the
    caret is preserved by counting the core (non-formatter) characters. */
 function formatAll(text, caret){ return spaceOps(regroupText(text, caret)); }
 
@@ -2484,7 +2472,13 @@ function migrateDocMarkup(d){
   if(typeof d.text==='string') d.text=convertLegacyMarkup(d.text);
   d.markup=MARKUP_V;
 }
-function migrateStoreMarkup(s){ ((s&&s.docs)||[]).forEach(migrateDocMarkup); }
+function migrateStoreMarkup(s){
+  ((s&&s.docs)||[]).forEach(d=>{
+    migrateDocMarkup(d);
+    // operators are no longer padded: drop old OSP padding (idempotent, no stamp needed)
+    if(d && typeof d.text==='string') d.text=unpadOps(d.text);
+  });
+}
 
 /* Stock docs use FIXED ids keyed to their role (not a random uid) so that the
    "Задачи"/"Личное" doc seeded independently on two devices is recognized as
