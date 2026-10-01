@@ -47,7 +47,7 @@
   --border-soft:#1d1f22;
   --text:#d9dbdf;          /* default / subtask text */
   --text-strong:#f0f2f4;   /* subtasks (white) */
-  --dim:#7c8086;           /* gutter, muted */
+  --dim:#7c8086;           /* muted */
   --dim-2:#4a4d53;
   /* ---- The five base hues. These are the ONLY chromatic literals in the app;
      every other colour token below is an alias of one of them, which is what
@@ -112,7 +112,6 @@
   --ls:-0.5px;             /* tighter spacing (kept in the char-width probe too so the caret stays aligned) */
   --pad-y:14px;
   --pad-x:16px;
-  --gutter-w:30px;
   --results-w:150px;
 }
 
@@ -419,27 +418,6 @@ button{font-family:inherit;color:inherit}
 #editor::-webkit-scrollbar{width:11px}
 #editor::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:8px;border:3px solid var(--bg-editor)}
 
-/* gutter (line numbers) — thin dim column, selectable, colorable */
-#gutter{
-  flex:0 0 var(--gutter-w);padding:var(--pad-y) 0;text-align:right;
-  user-select:none;position:relative;z-index:2;min-height:100%;
-}
-.gutter-line{
-  height:var(--lh);line-height:var(--lh);padding-right:6px;color:var(--dim);
-  font-size:12px;cursor:pointer;position:relative;white-space:nowrap;
-}
-.gutter-line:hover{color:var(--text)}
-/* Selection must read even on a line that carries its own color: the tint
-   is an inline background, so selection paints ABOVE it via box-shadow
-   (accent bar + wash) - a different property that inline styles can't win. */
-.gutter-line.selected{border-radius:7px;box-shadow:inset 2px 0 0 var(--accent), inset 0 0 0 999px var(--accent-soft)}
-/* While TEXT is selected in the editor, the spanned lines' numbers light up:
-   number glyphs only - the gutter cell, the selected text band and the
-   results column stay exactly as they are. !important beats an assigned
-   line-color's inline color so the accent reads on colored rows too. */
-.gutter-line.selrange{color:var(--accent)!important;font-weight:700}
-.gutter-line.src{color:var(--accent);font-weight:700}
-
 /* stack: layered highlight / textarea / hotspots. Height driven by in-flow
    #highlight; min-height fills the viewport for short documents. */
 #stack{flex:1 1 auto;position:relative;min-width:0;overflow:hidden;min-height:100%}
@@ -458,10 +436,10 @@ button{font-family:inherit;color:inherit}
 #highlight{position:relative;z-index:1;pointer-events:none;color:var(--text);
   width:100%;min-height:100%}
 /* min-height (not height): a line that doesn't fit the available width wraps
-   instead of being clipped; JS keeps the gutter/results rows the same height
+   instead of being clipped; JS keeps the results rows the same height
    as their matching (possibly wrapped) highlight row, see render(). */
 /* border-radius so every row-level background on a line — hover-source (clay),
-   done/checked tint, and the /tag & /date spotlight + line-colour washes
+   done/checked tint, and the /tag & /date spotlight washes
    (inset box-shadows) — renders with soft rounded corners, never a hard
    rectangle. Radius clips the inset box-shadows too. */
 .hl-line{min-height:var(--lh);width:100%;border-radius:9px}
@@ -528,7 +506,7 @@ button{font-family:inherit;color:inherit}
 }
 /* The native selection is made invisible in the editor: a custom rounded
    overlay (#sellayer) draws the selection instead, so it can have oval corners
-   like the line-number colour wash (native ::selection can't be rounded). The
+   like the row tints (native ::selection can't be rounded). The
    text itself is never obscured — the tint sits BEHIND #highlight's glyphs. */
 #input::selection{background:transparent;color:transparent}
 
@@ -604,16 +582,8 @@ button{font-family:inherit;color:inherit}
 @keyframes pill-fade{from{opacity:.15}to{opacity:1}}
 .result-line .pill.changed{animation:pill-fade .28s ease}
 
-/* context menu (line-number colors) */
-#ctxmenu{
-  position:fixed;z-index:50;background:var(--bg-panel);border:1px solid var(--border);
-  border-radius:10px;padding:9px;box-shadow:0 12px 34px rgba(0,0,0,.5);display:none;
-}
-#ctxmenu.open{display:block}
-.ctx-title{font-size:11px;color:var(--dim);margin:0 2px 8px;letter-spacing:.4px}
-/* One swatch grid, shared by the line-number menu and the tag colour picker —
-   both are limited to the app's base palette, so no colour outside it can enter
-   a document. */
+/* The swatch grid of the tag colour picker — limited to the app's base
+   palette, so no colour outside it can enter a document. */
 .swatches{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}
 .sw{width:22px;height:22px;border-radius:6px;cursor:pointer;border:1px solid var(--border)}
 .sw:hover{transform:scale(1.12)}
@@ -674,10 +644,8 @@ button{font-family:inherit;color:inherit}
   .doc-tab{padding:5px 8px;max-width:120px}
   /* Bigger, more legible scale on phones — fewer lines fit vertically, which
      is the intended trade-off. font-size ≥16px also stops iOS from auto-
-     zooming when the editor is focused. Line numbers hug the left edge
-     (narrow gutter) without letting digits run off-screen. */
-  :root{--fs:16px;--lh:28px;--results-w:104px;--gutter-w:28px}
-  .gutter-line{padding-right:3px;font-size:12px}
+     zooming when the editor is focused. */
+  :root{--fs:16px;--lh:28px;--results-w:104px}
   /* no results-column drag on phones */
   #results-resize{display:none}
   /* Every focusable text field must be ≥16px on iOS, otherwise Safari
@@ -803,7 +771,6 @@ button{font-family:inherit;color:inherit}
       <button class="icon-btn" id="find-close" title="закрыть (Esc)">✕</button>
     </div>
     <div id="editor">
-      <div id="gutter"></div>
       <div id="stack">
         <div id="searchlayer"></div>
         <div id="sellayer"></div>
@@ -822,10 +789,6 @@ button{font-family:inherit;color:inherit}
 </div>
 
 <div id="acbox" hidden></div>
-<div id="ctxmenu">
-  <p class="ctx-title">Цвет строк</p>
-  <div class="swatches" id="ctx-swatches"></div>
-</div>
 <div id="linemenu">
   <button class="lm-item danger" data-act="delete">Удалить строку</button>
 </div>
@@ -886,7 +849,6 @@ function slashTrigRe(label){
 const SENT = '\u2063';     // invisible marker: a copied result → inline pill
 function isCore(ch){ return !isFmtWS(ch) && ch!==SENT; }
 const TAG_SPOTLIGHT_ALPHA = 0.18;   // whole-line tint strength for an active "/tag" spotlight
-const LINE_TINT_ALPHA = 0.12;       // gutter-assigned line colors: soft whole-row wash
 const EMPTY_VARS = new Set(), EMPTY_OBJ = {};   // shared read-only fallbacks for sections with no vars
 
 /* Group the integer part every 3 digits with NBSP. */
@@ -1984,30 +1946,29 @@ function hexToRgba(hex, alpha){
    ================================================================ */
 const $=id=>document.getElementById(id);
 const input=$('input'), highlight=$('highlight'),
-      gutter=$('gutter'), results=$('results'), hotspots=$('hotspots'),
-      stack=$('stack'), editor=$('editor'), ctxmenu=$('ctxmenu'),
+      results=$('results'), hotspots=$('hotspots'),
+      stack=$('stack'), editor=$('editor'),
       linemenu=$('linemenu'), docmenu=$('docmenu'), toast=$('toast'),
       searchlayer=$('searchlayer'), sellayer=$('sellayer'), pillhover=$('pillhover'), caretlayer=$('caretlayer'),
       brackethover=$('brackethover');
 
 const STORE_KEY='calcuta.v2';
-/* Multi-document store. Tags are shared across documents; text, name and
-   line-number colors live per document. */
+/* Multi-document store. Tags are shared across documents; text and name
+   live per document. */
 let store={ docs:[], activeId:null, tags:[], tagsUpdated:0, deletedDocs:{}, deletedTags:{}, pinned:[], forceEpoch:0 };
 let prevResultVals={}, resultsPainted=false;   // for the result-pill fade animation
 let lastCopiedResult=null;   // {v, at}: last result copied from the column
 function doc(){ return store.docs.find(d=>d.id===store.activeId) || store.docs[0]; }
 function uid(){ return 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 let model=null;            // last analyze() + per-line meta
-let selectedGutter=new Set();
 let charW=8.4;             // measured monospace char width
 let LH=24;                  // px per visual row — kept in sync with --lh by measureChar()
 let charsPerLine=1;         // how many chars fit before a line wraps
 let lineRowTop=[], lineRowCount=[];   // per-source-line cumulative offset / row span (in LH units)
 
 /* ---------- render reconciliation state ----------
-   render() used to replace highlight/gutter/hotspots/results wholesale with
-   four innerHTML writes, so every keystroke destroyed and rebuilt every node
+   render() used to replace highlight/hotspots/results (and the former line-
+   number column) wholesale with innerHTML writes, so every keystroke destroyed and rebuilt every node
    in the document (2-5k elements on a long note) and forced a full relayout.
    Instead we keep the per-line signature strings from the previous render and
    touch only the lines whose signature actually moved.
@@ -2020,7 +1981,7 @@ let lineRowTop=[], lineRowCount=[];   // per-source-line cumulative offset / row
    a stale row is impossible by construction. Input-keyed memoization would
    instead have ~11 inputs to remember, and forgetting one paints silently
    stale output. */
-let prevHlSig=[], prevGutSig=[], prevResSig=[], prevHsHTML='';
+let prevHlSig=[], prevResSig=[], prevHsHTML='';
 /* A wrapped line's height depends on its own content and the container width,
    not on its index — so heights only need re-measuring for lines whose content
    changed, plus everything when the geometry itself changed. Anything that
@@ -2185,7 +2146,6 @@ function render(){
   const textCode=text.split('\n').map(stripLineComment).join('\n');
   const activeTags=activeSpotlightTags(textCode, store.tags);
   const activeDates=activeSpotlightDates(textCode);
-  const lineCols=doc().lineColors;
   // First pass: build each line's HTML and its tint list. We collect the tint
   // "signature" per line so a second pass can merge vertically-adjacent rows
   // that share the exact same tint into one continuous rounded block (no concave
@@ -2198,10 +2158,6 @@ function render(){
     const tints=[];
     if(built.spotlightColor) tints.push('inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA));
     else if(built.dateSpotlight) tints.push('inset 0 0 0 999px var(--date-spot)');
-    // a gutter-assigned line color washes the WHOLE row, softly - the vivid
-    // color itself stays on the line number, the text just gets a light tint
-    const lcol=lineCols[k];
-    if(lcol) tints.push('inset 0 0 0 999px '+hexToRgba(lcol, LINE_TINT_ALPHA));
     // The "#" heading fill is a plain background rather than an inset tint, but
     // it participates in the same merging: two stacked headings should read as
     // one purple block, not two pinched pills.
@@ -2277,39 +2233,8 @@ function render(){
   let acc=0;
   for(let k=0;k<n;k++){ lineRowTop[k]=acc; acc+=lineRowCount[k]; }
 
-  // 3) Gutter, checkbox hotspots and results column — sized/positioned from the
+  // 3) Checkbox hotspots and results column — sized/positioned from the
   //    measured rows so every column lines up with the wrapped text.
-  const gutEls=gutter.children;
-  const lineCountChanged = gutEls.length!==n;
-  while(gutEls.length>n) gutter.removeChild(gutter.lastChild);
-  const gutSig=new Array(n);
-  for(let k=0;k<n;k++){
-    const col=lineCols[k];
-    const style='height:'+(lineRowCount[k]*LH)+'px'+(col?';color:'+col:'');
-    gutSig[k]=style;
-    if(k<gutEls.length){
-      if(prevGutSig[k]===style) continue;
-      // Only the style attribute varies between renders; the class list and
-      // border-radius belong to refreshGutterSel()/selectionGutterSync() and
-      // must survive, which is exactly what reusing the cell buys us.
-      gutEls[k].setAttribute('style', style);
-    }else{
-      const el=document.createElement('div');
-      el.className='gutter-line';
-      el.setAttribute('data-i', k);
-      el.setAttribute('style', style);
-      el.textContent=k+1;
-      gutter.appendChild(el);
-    }
-  }
-  prevGutSig=gutSig;
-  refreshGutterSel();                             // selection marks + merged corners
-  // Cells are reused now, so their `.selrange` marks survive a render and the
-  // early-out in selectionGutterSync() is meaningful again — no need to defeat
-  // it on every keystroke. Only a change in line count invalidates the marks.
-  if(lineCountChanged) selRangeLines=[-9,-9];
-  selectionGutterSync();
-
   let hs='';
   const resSig=new Array(n);
   const newResultVals={};
@@ -2472,11 +2397,16 @@ function migrateDocMarkup(d){
   if(typeof d.text==='string') d.text=convertLegacyMarkup(d.text);
   d.markup=MARKUP_V;
 }
-function migrateStoreMarkup(s){
+/* Every stored or incoming doc passes through here (load + each remote
+   snapshot). All steps are idempotent and leave `updated` alone. */
+function normalizeStoreDocs(s){
   ((s&&s.docs)||[]).forEach(d=>{
+    if(!d) return;
     migrateDocMarkup(d);
-    // operators are no longer padded: drop old OSP padding (idempotent, no stamp needed)
-    if(d && typeof d.text==='string') d.text=unpadOps(d.text);
+    // operators are no longer padded: drop old OSP padding
+    if(typeof d.text==='string') d.text=unpadOps(d.text);
+    // line numbers (and the per-line colours assigned through them) are gone
+    delete d.lineColors;
   });
 }
 
@@ -2488,10 +2418,10 @@ function migrateStoreMarkup(s){
    merge — a freshly-seeded device can never clobber real data. */
 const TASKS_ID='stock-tasks', PERSONAL_ID='stock-personal';
 function makeTasksDoc(){
-  return { id:TASKS_ID, name:'Задачи', protected:'tasks', text:DEFAULT_DOC, lineColors:{}, updated:0, markup:MARKUP_V };
+  return { id:TASKS_ID, name:'Задачи', protected:'tasks', text:DEFAULT_DOC, updated:0, markup:MARKUP_V };
 }
 function makePersonalDoc(){
-  return { id:PERSONAL_ID, name:'Личное', protected:'personal', text:'', lineColors:{}, updated:0, markup:MARKUP_V };
+  return { id:PERSONAL_ID, name:'Личное', protected:'personal', text:'', updated:0, markup:MARKUP_V };
 }
 /* Force any protected doc onto its canonical id, so stock docs that were
    created before fixed ids existed (random uid) still merge as one across
@@ -2510,11 +2440,10 @@ function load(){
     // migrate from v1 single-document format, or start fresh
     let old=null; try{ old=JSON.parse(localStorage.getItem('calcuta.v1')||'null'); }catch(e){}
     store={ docs:[], activeId:null, tags:(old&&old.tags)||[] };
-    if(old && old.text) store.docs.push({id:uid(), name:'Черновик', text:old.text, lineColors:old.lineColors||{}});
+    if(old && old.text) store.docs.push({id:uid(), name:'Черновик', text:old.text});
   }
   // schema normalization / migration for the merge-based sync fields
   store.docs.forEach(d=>{
-    if(!d.lineColors) d.lineColors={};
     if(!d.id) d.id=uid();
     // only "tasks"/"personal" are real pinned roles — clear any stray value so
     // no extra document shows up pinned/undeletable.
@@ -2566,7 +2495,7 @@ function load(){
   // back onto a base colour (idempotent, see snapStoreColors)
   snapStoreColors(store);
   // pre-v2 docs: "//" headings / "#" comments become "#" / "//" (once, stamped)
-  migrateStoreMarkup(store);
+  normalizeStoreDocs(store);
   // ensure the stock, undeletable documents exist (pinned to top, in order)
   if(!store.docs.some(d=>d.protected==='tasks')){
     const tasks=makeTasksDoc();
@@ -2592,7 +2521,6 @@ function load(){
 function loadActiveIntoEditor(){
   const d=doc();
   input.value=d.text||'';
-  selectedGutter.clear();
   autoIndent();
   applyMask();
   // Formatting (auto-indent / number masking) may canonicalize the text right
@@ -2618,7 +2546,7 @@ function switchDoc(id){
 function createDoc(){
   persist();
   const n=store.docs.length+1;
-  const d={ id:uid(), name:'Документ '+n, text:'', lineColors:{}, updated:stamp(), markup:MARKUP_V };
+  const d={ id:uid(), name:'Документ '+n, text:'', updated:stamp(), markup:MARKUP_V };
   store.docs.push(d);
   store.activeId=d.id;
   loadActiveIntoEditor();
@@ -3095,7 +3023,6 @@ function onChange(){
   // edit always wins the per-doc merge.
   const d=doc();
   if(d){
-    if(d.text!==input.value) d.lineColors=remapLineColors(d.text, input.value, d.lineColors);
     d.text=input.value; d.updated=stamp();
   }
   render(); scheduleSave();
@@ -3444,34 +3371,6 @@ function restoreHistory(st){
 function doUndo(){ if(!undoStack.length) return; redoStack.push(histState()); restoreHistory(undoStack.pop()); }
 function doRedo(){ if(!redoStack.length) return; undoStack.push(histState()); restoreHistory(redoStack.pop()); }
 
-/* Line colors are bound to a line's TEXT, not its number. On every edit we remap
-   the color map from old line indices to new ones by matching the unchanged head
-   and tail of the document around the edit: a color rides along when lines are
-   inserted or removed above it, and it is dropped when its own line is deleted or
-   its text is fully erased. Called from onChange so ALL text changes (typing,
-   Enter, backspace-join, programmatic edits) get consistent behavior. */
-function remapLineColors(oldText, newText, lc){
-  if(!lc || !Object.keys(lc).length) return lc||{};
-  const o=oldText.split('\n'), nw=newText.split('\n');
-  const oLen=o.length, nLen=nw.length;
-  let p=0; while(p<oLen && p<nLen && o[p]===nw[p]) p++;                 // common leading lines
-  let s=0; while(s<oLen-p && s<nLen-p && o[oLen-1-s]===nw[nLen-1-s]) s++; // common trailing lines
-  const midNew=nLen-s-p;              // new lines occupying the changed region
-  const delta=nLen-oLen;
-  const out={};
-  Object.keys(lc).forEach(k=>{
-    const i=+k, color=lc[k];
-    let ni;
-    if(i<p) ni=i;                                      // before the edit: index unchanged
-    else if(i>=oLen-s) ni=i+delta;                     // after the edit: shifted by line delta
-    else { const j=i-p; if(j>=midNew) return; ni=p+j; } // inside the edit: positional; removed lines drop
-    if(ni<0 || ni>=nLen) return;
-    if(!(nw[ni]||'').trim()) return;                   // a fully-erased (blank) line loses its color
-    out[ni]=color;
-  });
-  return out;
-}
-
 /* ---------- delete a line (right-click menu / swipe) ---------- */
 function deleteLine(i){
   const lines=input.value.split('\n');
@@ -3479,8 +3378,6 @@ function deleteLine(i){
   const before=lines.slice(0,i).join('\n');
   lines.splice(i,1);
   const newText=lines.join('\n');
-  // color remap is handled generically in onChange (bound to text, not number)
-  selectedGutter.clear();
   const caret=Math.min(before.length, newText.length);
   commitValue(newText, i===0?0:caret);
 }
@@ -3607,17 +3504,16 @@ function applyTheme(t){
 }
 function setTheme(t){ try{ localStorage.setItem(THEME_KEY,t); }catch(e){} applyTheme(t); }
 
-/* ---------- line-number color context menu ---------- */
-/* The app's base palette — the ONLY colours a user can put into a document,
-   for both line numbers and tags. Everything here matches a CSS token, so the
+/* The app's base palette — the ONLY colours a user can put into a document
+   (tag colours). Everything here matches a CSS token, so the
    picked colours read as part of the same system instead of drifting away from
-   it. (They are stored as literal hex, so an already-coloured line keeps its
-   colour across a theme switch — that was true before too.) */
+   it. (They are stored as literal hex, so a tag keeps its colour across a
+   theme switch.) */
 const PALETTE=['#e8802c','#5ecb7e','#b98cf5','#7ec8f5','#e3b755',
                '#f14065','#8f897c','#f0f2f4'];
 
 /* ---------- snapping legacy colours onto the base palette ----------
-   Stored tag and line colours predate the closed palette — the tag colour used
+   Stored tag colours predate the closed palette — the tag colour used
    to be a free <input type="color">, so a document can carry any of 16M values.
    snapStoreColors() pulls them back in, on load and on every remote snapshot.
    It is idempotent, so each device converges on the same value on its own and
@@ -3681,10 +3577,6 @@ function snapStoreColors(s){
   if(Array.isArray(s.tags)) s.tags.forEach(t=>{
     const n=nearestPaletteColor(t && t.color); if(n) t.color=n;
   });
-  if(Array.isArray(s.docs)) s.docs.forEach(d=>{
-    const lc=d && d.lineColors; if(!lc) return;
-    for(const k in lc){ const n=nearestPaletteColor(lc[k]); if(n) lc[k]=n; }
-  });
   return s;
 }
 
@@ -3692,14 +3584,6 @@ function swatchHTML(sel, withClear){
   return PALETTE.map(c=>'<div class="sw'+(c===sel?' sel':'')+'" data-c="'+c+'" style="background:'+c+'"></div>').join('')
     +(withClear?'<div class="sw clear" data-c="" title="сбросить">×</div>':'');
 }
-function buildSwatches(){ $('ctx-swatches').innerHTML=swatchHTML(null, true); }
-function openCtxMenu(x,y){
-  ctxmenu.style.left=Math.min(x, window.innerWidth-200)+'px';
-  ctxmenu.style.top=Math.min(y, window.innerHeight-160)+'px';
-  ctxmenu.classList.add('open');
-}
-function closeCtxMenu(){ ctxmenu.classList.remove('open'); }
-
 /* ---------- line context menu (delete completed items) ---------- */
 let lineMenuTarget=-1;
 function openLineMenu(x,y,i){
@@ -3728,7 +3612,6 @@ function onStackCtx(e){
   // custom menu on any line (right-click → delete)
   if(row>=0 && row<lines.length){
     e.preventDefault();
-    closeCtxMenu();
     openLineMenu(e.clientX,e.clientY,row);
   }
 }
@@ -3793,10 +3676,9 @@ let hoverRow=-1, srcRow=-1;
    on every mousemove — that was the single largest cost on the hover path.
    A stale reference is harmless: removing a class the node no longer has is a
    no-op, and a node the renderer dropped is simply garbage. */
-let fxHlEl=null, fxGutEl=null;
+let fxHlEl=null;
 function clearRowFx(){
   if(fxHlEl){ fxHlEl.classList.remove('hover','src'); fxHlEl=null; }
-  if(fxGutEl){ fxGutEl.classList.remove('src'); fxGutEl=null; }
 }
 function setRowFx(){
   clearRowFx();
@@ -3806,8 +3688,6 @@ function setRowFx(){
   // line), handled via srcRow.
   if(srcRow>=0 && rb[srcRow]){
     fxHlEl=rb[srcRow]; fxHlEl.classList.add('src');
-    const gl=gutter.children[srcRow];
-    if(gl){ fxGutEl=gl; gl.classList.add('src'); }
   }
 }
 /* Given a y offset (already minus padY), find which source line it falls in
@@ -3844,18 +3724,9 @@ function lineColToOffset(row, col){
 }
 /* Memoized `input.value.split('\n')`.
    Several hot callers each re-split the whole document: renderCaret alone did
-   it three times per call, and it runs up to three times per keystroke, while
-   selectionGutterSync did two slices plus two splits on every selectionchange.
+   it three times per call, and it runs up to three times per keystroke.
    Comparing one string reference is far cheaper than allocating N new strings,
    and keying on the value itself means the cache can never go stale. */
-/* How many '\n' occur in s before index `upto` — i.e. the 0-based row index of
-   that offset. Matches the old `s.slice(0,upto).split('\n').length-1` exactly,
-   including a negative `upto` (which sliced to '' and yielded 0). */
-function countNewlines(s, upto){
-  let c=0; const end=Math.min(upto, s.length);
-  for(let i=0;i<end;i++) if(s.charCodeAt(i)===10) c++;
-  return c;
-}
 let _linesFor=null, _linesCache=null;
 function docLines(){
   const v=input.value;
@@ -4229,99 +4100,6 @@ function normalizeNumberRun(txt){
   });
 }
 
-/* ---------- gutter selection (click, shift/ctrl, and drag over numbers) ---------- */
-let lastGutterClick=-1, gutterDrag=false, dragAnchor=-1, dragAdditive=false;
-
-/* Line index under a y coordinate within the gutter (scroll-aware). */
-function gutterLineAt(clientY){
-  const r=gutter.getBoundingClientRect();
-  const n=model?model.data.lines.length:0;
-  const y=clientY-r.top-14;   // minus padY
-  const i=rowAtY(y).row;
-  return Math.max(0, Math.min(n-1, i));
-}
-function onGutterDown(e){
-  if(e.button!==0) return;                      // left button only
-  const el=e.target.closest('.gutter-line'); if(!el) return;
-  const i=+el.dataset.i;
-  if(e.shiftKey && lastGutterClick>=0){
-    const [a,b]=[Math.min(lastGutterClick,i),Math.max(lastGutterClick,i)];
-    for(let k=a;k<=b;k++) selectedGutter.add(k);
-    dragAnchor=lastGutterClick;
-  }else if(e.metaKey||e.ctrlKey){
-    selectedGutter.has(i)?selectedGutter.delete(i):selectedGutter.add(i);
-    lastGutterClick=i; dragAnchor=i;
-  }else{
-    selectedGutter.clear(); selectedGutter.add(i); lastGutterClick=i; dragAnchor=i;
-  }
-  gutterDrag=true; dragAdditive=(e.metaKey||e.ctrlKey);
-  refreshGutterSel();
-  e.preventDefault();                           // avoid text selection while dragging
-}
-function onGutterDragMove(e){
-  if(!gutterDrag) return;
-  const cur=gutterLineAt(e.clientY);
-  const [a,b]=[Math.min(dragAnchor,cur),Math.max(dragAnchor,cur)];
-  if(!dragAdditive){ selectedGutter.clear(); }
-  for(let k=a;k<=b;k++) selectedGutter.add(k);
-  lastGutterClick=cur;
-  refreshGutterSel();
-}
-function onGutterUp(){ gutterDrag=false; }
-/* Marks the selected numbers AND squares the edges a selected cell shares
-   with a selected neighbour, so a run reads as one continuous pill instead of
-   a column of pinched ovals. Same idea as the tint-run merging in render(),
-   just driven off the selection set rather than a tint signature. This is the
-   only place `selected` is toggled, so both the drag path and a fresh render
-   get the merged corners for free. */
-function refreshGutterSel(){
-  const els=gutter.children;
-  for(let i=0;i<els.length;i++){
-    const el=els[i], on=selectedGutter.has(+el.dataset.i);
-    el.classList.toggle('selected', on);
-    if(!on){ el.style.borderRadius=''; continue; }
-    const top=(i>0            && selectedGutter.has(+els[i-1].dataset.i)) ? '0' : '7px';
-    const bot=(i<els.length-1 && selectedGutter.has(+els[i+1].dataset.i)) ? '0' : '7px';
-    el.style.borderRadius=top+' '+top+' '+bot+' '+bot;
-  }
-}
-/* ---------- gutter mirror of the textarea TEXT selection ----------
-   Selecting text lights up the numbers of the spanned lines (glyphs only).
-   The results column and the text band itself are deliberately untouched. */
-let selRangeLines=[-9,-9];
-function selectionGutterSync(){
-  let a=-1,b=-1;
-  if(document.activeElement===input && input.selectionEnd>input.selectionStart){
-    // Count newlines in place. This runs on every selectionchange — i.e. on
-    // every caret move — and used to allocate two prefix strings plus two
-    // arrays of every line before the caret, only to read their `.length`.
-    const v=input.value;
-    a=countNewlines(v, input.selectionStart);
-    // minus one char: a selection ending at the very START of a line
-    // (dragging through the newline) doesn't count that next line
-    b=countNewlines(v, input.selectionEnd-1);
-    if(b<a) b=a;
-  }
-  if(a===selRangeLines[0] && b===selRangeLines[1]) return;
-  selRangeLines=[a,b];
-  const els=gutter.children;
-  for(let i=0;i<els.length;i++) els[i].classList.toggle('selrange', a>=0&&i>=a&&i<=b);
-}
-function onGutterCtx(e){
-  const el=e.target.closest('.gutter-line'); if(!el) return;
-  e.preventDefault();
-  const i=+el.dataset.i;
-  if(!selectedGutter.has(i)){ selectedGutter.clear(); selectedGutter.add(i); lastGutterClick=i; refreshGutterSel(); }
-  openCtxMenu(e.clientX,e.clientY);
-}
-function applyLineColor(color){
-  const lc=doc().lineColors;
-  selectedGutter.forEach(i=>{
-    if(color) lc[i]=color; else delete lc[i];
-  });
-  closeCtxMenu(); render(); scheduleSave();   // render() re-marks the gutter itself
-}
-
 /* ---------- copy result ---------- */
 function onResultsClick(e){
   const el=e.target.closest('.result-line.has'); if(!el) return;
@@ -4610,7 +4388,7 @@ function orderDocs(docs){
     return a.id<b.id?-1:(a.id>b.id?1:0);
   });
 }
-function docSig(d){ return JSON.stringify({n:d.name||'',t:d.text||'',c:d.lineColors||{}}); }
+function docSig(d){ return JSON.stringify({n:d.name||'',t:d.text||''}); }
 
 /* Deterministic, commutative per-document merge of two stores. */
 function mergeStores(local, remote){
@@ -4693,9 +4471,8 @@ function mergeStores(local, remote){
    prefs excluded) so we can tell whether a merge actually changed anything
    versus the cloud — used to avoid pointless re-upload ping-pong. */
 function syncPayload(s){
-  const lc=o=>{ const r={}; Object.keys(o||{}).sort().forEach(k=>r[k]=o[k]); return r; };
   const docs=(s.docs||[]).slice().sort((a,b)=>a.id<b.id?-1:1)
-    .map(d=>({id:d.id,name:d.name||'',text:d.text||'',lineColors:lc(d.lineColors),protected:d.protected||null,updated:d.updated||0}));
+    .map(d=>({id:d.id,name:d.name||'',text:d.text||'',protected:d.protected||null,updated:d.updated||0}));
   const tomb={}; Object.keys(s.deletedDocs||{}).sort().forEach(k=>tomb[k]=s.deletedDocs[k]);
   const tags=(s.tags||[]).slice()
     .sort((a,b)=>(a.label||'').toLowerCase()<(b.label||'').toLowerCase()?-1:1)
@@ -4709,7 +4486,6 @@ function parseRemote(raw){
   let s; try{ s=JSON.parse(raw.data); }catch(e){ return null; }
   if(!s||!Array.isArray(s.docs)) return null;
   s.docs.forEach(d=>{
-    if(!d.lineColors) d.lineColors={};
     if(!d.id) d.id=uid();
     if(d.protected && d.protected!=='tasks' && d.protected!=='personal') delete d.protected;
     // fold legacy pre-fixed-id stock docs (recognized by exact reserved name) into the canonical pinned slot
@@ -4733,7 +4509,6 @@ function adoptMerged(merged){
   merged.activeId=store.activeId;
   merged.resultsWidth=store.resultsWidth;
   merged.pinned=store.pinned;                 // pins are device-local, like activeId
-  merged.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; });
   if(!merged.tags) merged.tags=[];
   if(!merged.deletedTags || typeof merged.deletedTags!=='object') merged.deletedTags={};
   if(!merged.docs.length) merged.docs.push(makeTasksDoc());          // never end up doc-less
@@ -4783,7 +4558,6 @@ function adoptForced(remote){
   next.activeId=store.activeId;
   next.resultsWidth=store.resultsWidth;
   next.pinned=store.pinned;
-  next.docs.forEach(d=>{ if(!d.lineColors) d.lineColors={}; });
   if(!next.tags) next.tags=[];
   if(!next.deletedTags || typeof next.deletedTags!=='object') next.deletedTags={};
   if(!next.docs.length) next.docs.push(makeTasksDoc());
@@ -4842,7 +4616,7 @@ function subscribeCloud(){
    paths behave identically. */
 function reconcileRemote(remote){
   snapStoreColors(remote);   // a device that hasn't migrated yet can still send legacy colours
-  migrateStoreMarkup(remote);   // …and legacy-markup docs
+  normalizeStoreDocs(remote);   // …and legacy-markup docs
   observeStore(remote);   // advance the logical clock past everything the cloud has seen
   // HARD SAVE from another device: a higher forceEpoch means "make every device
   // exactly this version". Adopt it wholesale, discarding any local divergence
@@ -4925,7 +4699,7 @@ function pushCloudNow(){
   db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
     adopt=null;                          // reset per attempt — the callback re-runs on contention
     const remote=snap.exists?parseRemote(snap.data()):null;
-    if(remote){ snapStoreColors(remote); migrateStoreMarkup(remote); observeStore(remote); }
+    if(remote){ snapStoreColors(remote); normalizeStoreDocs(remote); observeStore(remote); }
     if(remote && (remote.forceEpoch||0)>(store.forceEpoch||0)){
       adopt={forced:remote}; sent=syncPayload(remote);
       return;                            // a newer hard save stands — adopt it, write nothing
@@ -4984,7 +4758,7 @@ function hardSave(){
   let adopt=null, sent=null;
   db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
     const remote=snap.exists?parseRemote(snap.data()):null;
-    if(remote){ snapStoreColors(remote); migrateStoreMarkup(remote); observeStore(remote); }
+    if(remote){ snapStoreColors(remote); normalizeStoreDocs(remote); observeStore(remote); }
     const next=remote?mergeStores(store,remote):store;
     next.forceEpoch=Math.max(store.forceEpoch||0, (remote&&remote.forceEpoch)||0, Date.now())+1;
     adopt=next; sent=syncPayload(next);
@@ -5180,7 +4954,7 @@ async function openSharedView(){
   $('sb-import').addEventListener('click', ()=>importSharedDoc(data));
 }
 function importSharedDoc(data){
-  const d={ id:uid(), name:data.n||'Присланный документ', text:data.t, lineColors:{}, updated:stamp(), markup:MARKUP_V };
+  const d={ id:uid(), name:data.n||'Присланный документ', text:data.t, updated:stamp(), markup:MARKUP_V };
   store.docs.push(d); store.activeId=d.id;
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
   history.replaceState(null,'',location.pathname);   // drop the #doc= hash
@@ -5202,7 +4976,6 @@ async function shareLink(){
 function boot(){
   measureChar();
   computeCharsPerLine();
-  buildSwatches();
   load();
   // currency rates: show the last-known values immediately. The refresh is no
   // longer fired here — see maybeRefreshFx(), which only goes to the network
@@ -5241,11 +5014,9 @@ function boot(){
   input.addEventListener('paste', onPaste);
   input.addEventListener('scroll', syncScroll);
 
-  document.addEventListener('selectionchange', selectionGutterSync);
   document.addEventListener('selectionchange', renderSelection);   // rounded selection overlay
   document.addEventListener('selectionchange', renderCaret);       // block caret + empty-line ghost
   document.addEventListener('selectionchange', updateBracketMatch); // matching-bracket highlight
-  input.addEventListener('blur', ()=>setTimeout(selectionGutterSync,0));
   input.addEventListener('blur', ()=>{ if(sellayer) sellayer.innerHTML=''; });   // drop the overlay when focus leaves
   input.addEventListener('blur', ()=>{ if(caretlayer) caretlayer.innerHTML=''; stopCaretWatch(); });
   input.addEventListener('blur', ()=>{ if(brackethover) brackethover.innerHTML=''; });
@@ -5266,11 +5037,6 @@ function boot(){
     const hit=e.target.closest('.cbox-hit'); if(hit){ toggleCheckbox(+hit.dataset.i); }
   });
 
-  gutter.addEventListener('mousedown', onGutterDown);
-  document.addEventListener('mousemove', onGutterDragMove);
-  document.addEventListener('mouseup', onGutterUp);
-  gutter.addEventListener('contextmenu', onGutterCtx);
-
   // copying a result must not steal the caret: killing the mousedown's
   // default keeps focus in the editor (results are inert text anyway)
   results.addEventListener('mousedown', e=>e.preventDefault());
@@ -5278,21 +5044,16 @@ function boot(){
   results.addEventListener('mouseover', onResultHover);
   results.addEventListener('mouseleave', onResultLeave);
 
-  $('ctx-swatches').addEventListener('click', e=>{
-    const sw=e.target.closest('.sw'); if(!sw) return; applyLineColor(sw.dataset.c);
-  });
   linemenu.addEventListener('click', e=>{
     const it=e.target.closest('.lm-item'); if(!it) return;
     if(it.dataset.act==='delete' && lineMenuTarget>=0) deleteLine(lineMenuTarget);
     closeLineMenu();
   });
   document.addEventListener('click', e=>{
-    if(!ctxmenu.contains(e.target)) closeCtxMenu();
     if(!linemenu.contains(e.target)) closeLineMenu();
     if(!docmenu.contains(e.target)) closeDocMenu();
   });
   document.addEventListener('contextmenu', e=>{
-    if(!e.target.closest('#gutter')&&!ctxmenu.contains(e.target)) closeCtxMenu();
     if(!e.target.closest('#stack')&&!linemenu.contains(e.target)) closeLineMenu();
     if(!e.target.closest('#docfind-list')&&!e.target.closest('#pinned-tabs')&&!docmenu.contains(e.target)) closeDocMenu();
   });
@@ -5554,7 +5315,6 @@ function boot(){
   // keep the keepalive token fresh (Firebase ID tokens expire ~1h)
   setInterval(refreshIdToken, 1800000);
 
-  // keep gutter/results scrolled with editor vertical scroll is automatic (flex children)
 }
 
 document.addEventListener('DOMContentLoaded', boot);
@@ -5564,8 +5324,8 @@ window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluate
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
   curCmdAt, lineCurCmd, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
-  offsetToLineCol, countNewlines, dateAtIdx,
-  convertLegacyMarkup, migrateStoreMarkup, MARKUP_V,
+  offsetToLineCol, dateAtIdx,
+  convertLegacyMarkup, normalizeStoreDocs, MARKUP_V,
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); },
   // seam for tests/staletest.js: drive the real cloud write paths against a
   // fake Firestore, so the "stale device must never clobber newer cloud data"

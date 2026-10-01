@@ -33,7 +33,7 @@ const EXE = path.join(os.homedir(),
   const steps = await page.evaluate(() => {
     const input = document.getElementById('input');
     const fire = () => input.dispatchEvent(new Event('input', { bubbles: true }));
-    const IDS = ['highlight', 'gutter', 'results', 'hotspots'];
+    const IDS = ['highlight', 'results', 'hotspots'];
     const snap = (name) => {
       const o = { step: name, value: input.value };
       for (const id of IDS) o[id] = document.getElementById(id).innerHTML;

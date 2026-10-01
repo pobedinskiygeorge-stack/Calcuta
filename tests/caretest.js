@@ -1,5 +1,5 @@
-// Caret / selection / gutter-sync correctness test.
-// Exercises offsetToLineCol(), countNewlines(), docLines() and the caret +
+// Caret / selection correctness test.
+// Exercises offsetToLineCol(), docLines() and the caret +
 // selection overlays, which the innerHTML snapshot does not cover.
 //   node caretest.js <path-to-index.html>
 const { chromium } = require('playwright-core');
@@ -66,36 +66,9 @@ const DOC = [
     }
     const caretRows = seen.size;
 
-    // 3. Gutter selection mirror: select a range and check exactly the spanned
-    //    line numbers carry .selrange.
-    const gutter = document.getElementById('gutter');
     const lines = v.split('\n');
     const starts = [];
     { let acc = 0; for (const l of lines) { starts.push(acc); acc += l.length + 1; } }
-    for (let a = 0; a < lines.length; a++) {
-      for (let b = a; b < lines.length; b++) {
-        const s = starts[a];
-        const e = starts[b] + lines[b].length;
-        if (e <= s) continue;
-        input.setSelectionRange(s, e);
-        document.dispatchEvent(new Event('selectionchange'));
-        const marked = [...gutter.children].map((el, i) => el.classList.contains('selrange') ? i : -1).filter(i => i >= 0);
-        // The app's documented rule: a selection ending at the very START of a
-        // line (i.e. dragged through the trailing newline, or ending on an
-        // empty line) does not light that line up. So the last marked row is
-        // the row containing offset e-1, not e.
-        let bEff = 0;
-        for (let i = 0; i < Math.min(e - 1, v.length); i++) if (v.charCodeAt(i) === 10) bEff++;
-        if (bEff < a) bEff = a;
-        const want = [];
-        for (let i = a; i <= bEff; i++) want.push(i);
-        if (JSON.stringify(marked) !== JSON.stringify(want)) {
-          fails.push('selrange for lines ' + a + '..' + b + ' = [' + marked + '] want [' + want + ']');
-          if (fails.length > 8) break;
-        }
-      }
-      if (fails.length > 8) break;
-    }
 
     // 4. Selection overlay paints boxes for a multi-line selection.
     input.setSelectionRange(starts[1], starts[4] + 10);

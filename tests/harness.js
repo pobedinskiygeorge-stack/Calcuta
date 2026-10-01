@@ -147,7 +147,6 @@ const CORPUS = [
     setText(corpus);
 
     out.highlight = document.getElementById('highlight').innerHTML;
-    out.gutter = document.getElementById('gutter').innerHTML;
     out.results = document.getElementById('results').innerHTML;
     out.hotspots = document.getElementById('hotspots').innerHTML;
     // The value after the live formatter has run over it (mask + op spacing).
@@ -159,7 +158,6 @@ const CORPUS = [
       ops[name] = {
         value: input.value,
         hl: document.getElementById('highlight').innerHTML,
-        gut: document.getElementById('gutter').innerHTML,
         res: document.getElementById('results').innerHTML,
       };
     };
