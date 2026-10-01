@@ -526,8 +526,8 @@ button{font-family:inherit;color:inherit}
 .search-mark.active{background:var(--search-mark-active);box-shadow:0 0 0 1px var(--date)}
 
 /* "#" section rail: a thin gray guide that drops from under a heading's "#"
-   and runs down the whole section - blank lines included - to the next
-   heading or the end of the document, like an indent guide in a code editor.
+   and frames what is written in the section (see renderRails), like an
+   indent guide in a code editor.
    It sits BEHIND the text layer: the wrapped rows of an indented line restart
    at column 0, right under the "#", and their glyphs must paint over it. */
 #sectionlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
@@ -2305,26 +2305,7 @@ function render(){
   // enough to skip the rebuild entirely on the overwhelming majority of edits.
   if(hs!==prevHsHTML){ hotspots.innerHTML=hs; prevHsHTML=hs; }
 
-  // "#" section rails: from just under a heading's "#" down through every
-  // line of its section - blank ones too, so the rail grows as Enter adds
-  // lines - to the line before the next heading or the end of the document.
-  // A heading followed directly by another heading has nothing under it and
-  // gets no rail. One pass in total: each line is visited by one heading's
-  // scan. x = middle of the "#" glyph (headings are never indented).
-  let rails='';
-  for(let k=0;k<n;k++){
-    if(A.lines[k].cls.kind!=='super') continue;
-    let j=k+1; while(j<n && A.lines[j].cls.kind!=='super') j++;
-    const last=j-1;
-    if(last>k){
-      const top=(lineRowTop[k]+lineRowCount[k])*LH + 14 + 2;              // under the heading row (+ padY)
-      const bottom=(lineRowTop[last]+lineRowCount[last])*LH + 14 - 3;    // small gap before the next heading
-      const left=Math.round(16 + charW/2);                               // padX + half a glyph
-      rails+='<div class="sec-rail" data-i="'+k+'" style="top:'+top+'px;height:'+(bottom-top)+'px;left:'+left+'px"></div>';
-    }
-    k=j-1;
-  }
-  if(rails!==prevRailHTML){ sectionlayer.innerHTML=rails; prevRailHTML=rails; }
+  renderRails(true);
   // Results: one node per line, replaced only where the rendered string moved.
   const resEls=results.children;
   while(resEls.length>n) results.removeChild(results.lastChild);
@@ -3823,6 +3804,40 @@ function setRowFx(){
     fxHlEl=rb[srcRow]; fxHlEl.classList.add('src');
   }
 }
+/* "#" section rails. A rail drops from just under a heading's "#" and frames
+   what is actually written in its section: down to the last line with text,
+   straight through any blank lines in between. While the caret sits further
+   down in that section (Enter just pressed, nothing typed yet) the rail
+   follows it there; once the caret leaves that spot or the editor loses
+   focus, the rail shrinks back to the last written line. A heading with
+   nothing written under it gets no rail. One pass over the lines in total.
+   Called from render() (force) and on every caret move / focus change, where
+   it only rebuilds when the caret's row or the focus actually changed. */
+let railCaretKey='';
+function renderRails(force){
+  if(!model) return;
+  const L=model.data.lines, n=L.length;
+  const focused=(document.activeElement===input);
+  const caretRow=focused ? offsetToLineCol(input.selectionStart).row : -1;
+  const key=caretRow+'|'+n;
+  if(!force && key===railCaretKey) return;
+  railCaretKey=key;
+  let rails='';
+  for(let k=0;k<n;k++){
+    if(L[k].cls.kind!=='super') continue;
+    let j=k+1, last=k;
+    for(;j<n && L[j].cls.kind!=='super';j++) if(L[j].raw.trim()) last=j;
+    if(caretRow>last && caretRow<j) last=caretRow;                       // still typing below the text
+    if(last>k){
+      const top=(lineRowTop[k]+lineRowCount[k])*LH + 14 + 2;              // under the heading row (+ padY)
+      const bottom=(lineRowTop[last]+lineRowCount[last])*LH + 14 - 3;
+      const left=Math.round(16 + charW/2);                               // padX + half a glyph: under the "#"
+      rails+='<div class="sec-rail" data-i="'+k+'" style="top:'+top+'px;height:'+(bottom-top)+'px;left:'+left+'px"></div>';
+    }
+    k=j-1;
+  }
+  if(rails!==prevRailHTML){ sectionlayer.innerHTML=rails; prevRailHTML=rails; }
+}
 /* Given a y offset (already minus padY), find which source line it falls in
    and which of that line's wrapped visual rows (0 = first). Mirrors the
    lineRowTop/lineRowCount layout computed in render(). Returns row===n (one
@@ -5150,6 +5165,9 @@ function boot(){
   document.addEventListener('selectionchange', renderSelection);   // rounded selection overlay
   document.addEventListener('selectionchange', renderCaret);       // block caret + empty-line ghost
   document.addEventListener('selectionchange', updateBracketMatch); // matching-bracket highlight
+  document.addEventListener('selectionchange', ()=>renderRails());   // section rail follows the caret
+  input.addEventListener('focus', ()=>renderRails());
+  input.addEventListener('blur', ()=>setTimeout(()=>renderRails(),0));
   input.addEventListener('blur', ()=>{ if(sellayer) sellayer.innerHTML=''; });   // drop the overlay when focus leaves
   input.addEventListener('blur', ()=>{ if(caretlayer) caretlayer.innerHTML=''; stopCaretWatch(); });
   input.addEventListener('blur', ()=>{ if(brackethover) brackethover.innerHTML=''; });
