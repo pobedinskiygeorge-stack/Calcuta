@@ -468,8 +468,6 @@ button{font-family:inherit;color:inherit}
 #highlight .date{color:var(--date);font-weight:500}
 #highlight .label{color:var(--label);font-weight:500}
 #highlight .quote{color:var(--super)}
-#highlight .b{font-weight:700}                       /* "**bold**" run (Ctrl+B) */
-#highlight .bmark{color:var(--dim)!important;opacity:.45;font-weight:400}   /* its "**" markers, faint */
 #highlight .super{color:var(--super);font-weight:700}   /* "#" heading: bold (mono bold keeps the advance, so the overlay stays aligned) */
 #highlight .header{color:var(--comment)}
 #highlight .cur{color:var(--cur);font-weight:600}   /* "/usd" "/euro" "/yuan" currency command */
@@ -1313,15 +1311,6 @@ const CB_RE   = /^(\s*)\[([ xX])\]\s?/;     // checkbox marker
 const SUPER_RE= /^(\s*)#\s?/;               // supertask heading #
 const HEADER_RE=/^(\s*)\/\/\s?/;            // note //  (kind 'header' is historical: it is the inert note)
 
-/* Bold: "**текст**" (Ctrl/Cmd+B toggles it). The markers are ordinary
-   characters, and "*" is multiplication, so math must never see them: each
-   marker of a bold run is replaced by two spaces, which keeps every offset
-   (calcRange, pills, highlighting) identical to the raw line. Like Markdown,
-   a run needs non-space just inside both markers ("** x**" is not bold);
-   "****" is an empty run - what Ctrl+B leaves to type into. */
-const BOLD_RE=/\*\*(?!\s)(.*?)(?<!\s)\*\*/g;
-function unboldForMath(line){ return line.indexOf('**')<0 ? line : line.replace(BOLD_RE, (m,inner)=>'  '+inner+'  '); }
-
 function classify(line){
   let m;
   if((m=CB_RE.exec(line)))    return {kind:'checkbox', checked:/x/i.test(m[2]), markerLen:m[0].length, indent:m[1].length};
@@ -1451,10 +1440,21 @@ function applyRoundMarker(v){ return Math.ceil(v/10)*10; }
    (assignment values) and `varDefLine` (name -> first defining line index
    within that section), so the same name can hold a different value in
    parallel under a different heading. */
-function analyze(text){
-  const rawLines=text.split('\n');
-  const lines=rawLines.map(unboldForMath);   // what math, assignments and scans read
-  const secOf=computeSections(rawLines);
+function analyze(text, pairAt){
+  const lines=text.split('\n');
+  // `pairAt`: offset of a "(" whose ")" autoPair just inserted, caret still
+  // between them. That "()" is a bracket pair being typed, not the round
+  // marker, so it must not round its line - unless the line has another "()".
+  let pairLine=-1;
+  if(pairAt>=0){
+    let off=0;
+    for(let k=0;k<lines.length;k++){
+      const L=lines[k];
+      if(pairAt<off+L.length){ const c=pairAt-off; if(L.slice(c,c+2)==='()' && (L.slice(0,c)+L.slice(c+2)).indexOf('()')<0) pairLine=k; break; }
+      off+=L.length+1;
+    }
+  }
+  const secOf=computeSections(lines);
   const {heads, consumed}=computeAssignments(lines);
   const varsBySection=collectVarsBySection(lines, secOf, heads);
   const scopesBySection={};
@@ -1465,14 +1465,14 @@ function analyze(text){
   const out=[];
 
   lines.forEach((line, idx)=>{
-    const cls=classify(rawLines[idx]);
+    const cls=classify(line);
     const sec=secOf[idx];
     const content=line.slice(cls.markerLen);
     // A line folded into a preceding multi-line assignment's RHS (an expression
     // that kept going after "имя =" via single Enters) doesn't compute or
     // aggregate on its own — it only renders, with its numbers still lit.
     if(consumed.has(idx)){
-      out.push({raw:rawLines[idx], cls, content, result:null, assignedName:null, calcRange:null, error:false, dateCount:false, currency:null, section:sec, contLine:true});
+      out.push({raw:line, cls, content, result:null, assignedName:null, calcRange:null, error:false, dateCount:false, currency:null, section:sec, contLine:true});
       return;
     }
     const vars=varsBySection[sec] || (varsBySection[sec]=new Set());
@@ -1495,7 +1495,8 @@ function analyze(text){
       const toks=tokenizeMath(rhsCode, vars);
       const lr=evaluateLenient(toks, scope, ctx);
       let v=lr.v;
-      if(v!==null && (head.roundMark||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
+      const pend=(pairLine===idx || head.span.includes(pairLine)) && rhsCode.split('()').length===2;
+      if(v!==null && !pend && (head.roundMark||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
       if(v!==null){ scope[name]=v; result=v; assignedName=name;
         const eq=line.lastIndexOf('='); if(eq>=0 && eq+1<line.length) calcRange=[eq+1, line.length]; }
       else if(lr.err) error=true;
@@ -1517,7 +1518,7 @@ function analyze(text){
             const toks=tokenizeMath(rhsCode, vars);
             const lr=evaluateLenient(toks, scope, ctx);
             let v=lr.v;
-            if(v!==null && (am[2]||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
+            if(v!==null && idx!==pairLine && (am[2]||hasRoundMarker(rhsCode))) v=applyRoundMarker(v);
             if(v!==null){ scope[name]=v; result=v; assignedName=name;
               // rhs runs to end of line, so its offset within the line is exact
               if(lr.range){ const off=line.length-rhs.length; calcRange=[lr.range[0]+off, lr.range[1]+off]; } }
@@ -1533,7 +1534,7 @@ function analyze(text){
       const toks=tokenizeMath(contentCode, vars);
       const lr=evaluateLenient(toks, scope, ctx);
       result=lr.v;
-      if(result!==null && hasRoundMarker(contentCode)) result=applyRoundMarker(result);
+      if(result!==null && idx!==pairLine && hasRoundMarker(contentCode)) result=applyRoundMarker(result);
       if(result!==null && lr.range) calcRange=[lr.range[0]+cls.markerLen, lr.range[1]+cls.markerLen];
       if(result===null && lr.err) error=true;
       // a bare "dd.mm - dd.mm" range (no math) reports its day count
@@ -1559,7 +1560,7 @@ function analyze(text){
       ctx.prev=result;
     }
 
-    out.push({raw:rawLines[idx], cls, content, result, assignedName, calcRange, error, dateCount, rateCmd, section:sec});
+    out.push({raw:line, cls, content, result, assignedName, calcRange, error, dateCount, rateCmd, section:sec});
   });
 
   return {lines:out, varsBySection, varDefLineBySection, scopesBySection};
@@ -1602,7 +1603,7 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   const cr = item.calcRange;
   const inCalc = k => !cr || (k>=cr[0] && k<cr[1]);
   // char-class array; higher priority overrides
-  const P={base:0, num:1, date:2, op:3, label:4, quote:5, cur:5.5, tag:6, varr:7, link:8, doclink:9, cmt:10, bmark:11};
+  const P={base:0, num:1, date:2, op:3, label:4, quote:5, cur:5.5, tag:6, varr:7, link:8, doclink:9, cmt:10};
   const cclass=new Array(len).fill('');   // css class per char
   const cmeta =new Array(len).fill(null); // {type, defLine} for hover
   const prio  =new Array(len).fill(-1);
@@ -1828,19 +1829,6 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
     }
   }
 
-  // ---- bold "**…**": the run's text is bold on top of whatever colour it
-  //      has; the markers stay (they're real characters) but are drawn faint ----
-  const bold=new Array(len).fill(false);
-  if(raw.indexOf('**')>=0){
-    BOLD_RE.lastIndex=0; let bm;
-    while((bm=BOLD_RE.exec(raw))){
-      const a=bm.index, z=a+bm[0].length;
-      if(a<bodyStart) continue;
-      paint(a,a+2,'bmark',P.bmark); paint(z-2,z,'bmark',P.bmark);
-      for(let q=a+2;q<z-2;q++) bold[q]=true;
-    }
-  }
-
   // ---- checkbox marker: render the LITERAL "[ ]"/"[x]" so column widths
   //      stay identical to the textarea. The bracket may be preceded by
   //      hierarchy indent, so anchor it at cls.indent, not at 0. ----
@@ -1857,11 +1845,11 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
   let bodyHTML='';
   let k=bodyStart;
   while(k<len){
-    const cl=cclass[k], col=color[k], pl=pill[k], bd=bold[k];
+    const cl=cclass[k], col=color[k], pl=pill[k];
     let j=k+1;
-    while(j<len && cclass[j]===cl && color[j]===col && pill[j]===pl && bold[j]===bd) j++;
+    while(j<len && cclass[j]===cl && color[j]===col && pill[j]===pl) j++;
     const chunk=esc(raw.slice(k,j));
-    const cls2=(cl||(cls.kind==='text'?'sub':''))+(pl?' rpill':'')+(bd?' b':'');
+    const cls2=(cl||(cls.kind==='text'?'sub':''))+(pl?' rpill':'');
     const style=col? ' style="color:'+col+'"' : '';
     bodyHTML+= cls2 ? '<span class="'+cls2.trim()+'"'+style+'>'+chunk+'</span>' : '<span>'+chunk+'</span>';
     k=j;
@@ -2148,7 +2136,14 @@ function posAfterNonSep(s, count){ let c=0,k=0; for(;k<s.length;k++){ if(c===cou
 /* ---------- render pipeline ---------- */
 function render(){
   const text=input.value;
-  const A=analyze(text);
+  // a "()" autoPair just inserted, caret still inside: a pair being typed, not a round marker
+  let pairAt=-1;
+  if(pairPending){
+    const c=input.selectionStart;
+    if(document.activeElement===input && c===input.selectionEnd && text[c-1]==='(' && text[c]===')') pairAt=c-1;
+    else pairPending=false;
+  }
+  const A=analyze(text, pairAt);
   model={data:A, meta:[]};
   hidePillHover();   // stale pixel geometry from before this render is worthless; next mousemove re-shows it correctly
 
@@ -2384,7 +2379,18 @@ function scheduleSave(){
    snapshot, so a legacy copy still arriving from a device on an older cached
    build is converted on receipt. The stamp travels inside the doc object,
    which every sync path (merge, adopt, cloud JSON) carries whole. */
-const MARKUP_V=2;
+const MARKUP_V=3;
+/* v3: a short-lived build had Ctrl+B wrap text in "**…**". That feature is
+   gone, so the markers it left behind are removed once ("**слово**" ->
+   "слово", an empty "****" -> ""), keeping the text itself. */
+const LEGACY_BOLD_RE=/\*\*(?!\s)(.*?)(?<!\s)\*\*/g;
+function stripLegacyBold(text){ return text.indexOf('**')<0 ? text : text.replace(LEGACY_BOLD_RE, '$1'); }
+/* Bring text saved at markup version `from` up to the current one, step by step. */
+function upgradeMarkup(text, from){
+  if(from<2) text=convertLegacyMarkup(text);
+  if(from===2) text=stripLegacyBold(text);   // only v2 text can carry Ctrl+B markers; older "**" was typed by hand
+  return text;
+}
 /* The pre-v2 inline-comment rule, verbatim, but for "#": only needed to find
    legacy tails ("x = 100 #note") so they can become "//" notes. */
 function legacyCommentStart(s){
@@ -2414,7 +2420,7 @@ function convertLegacyMarkup(text){
 }
 function migrateDocMarkup(d){
   if(!d || (d.markup|0)>=MARKUP_V) return;
-  if(typeof d.text==='string') d.text=convertLegacyMarkup(d.text);
+  if(typeof d.text==='string') d.text=upgradeMarkup(d.text, d.markup|0);
   d.markup=MARKUP_V;
 }
 /* Every stored or incoming doc passes through here (load + each remote
@@ -2740,12 +2746,20 @@ function computeMatches(){
   searchMatches=[];
   const q=searchQuery;
   if(!q){ searchIdx=-1; return; }
-  const ql=q.toLowerCase();
+  // Digit grouping is display-only: "1000" must find "1 000", and so must
+  // "1 000" typed with an ordinary space. Both sides are compared without it,
+  // and each hit is mapped back to its span in the real line.
+  const ql=q.toLowerCase().replace(/(\d)[ \u00a0\u202f](?=\d)/g,'$1');
+  if(!ql){ searchIdx=-1; return; }
   const lines=docLines();
   lines.forEach((line,li)=>{
-    const hay=line.toLowerCase();
+    const map=[]; let hay='';
+    for(let k=0;k<line.length;k++){ if(isFmtWS(line[k])) continue; map.push(k); hay+=line[k].toLowerCase(); }
     let c=0;
-    while((c=hay.indexOf(ql,c))!==-1){ searchMatches.push({line:li,col:c,len:q.length}); c+=q.length; }
+    while((c=hay.indexOf(ql,c))!==-1){
+      const from=map[c], to=map[c+ql.length-1]+1;
+      searchMatches.push({line:li,col:from,len:to-from}); c+=ql.length;
+    }
   });
   if(searchMatches.length===0) searchIdx=-1;
   else if(searchIdx<0||searchIdx>=searchMatches.length) searchIdx=0;
@@ -2927,36 +2941,61 @@ sum
    into "/бюджет" or "/usd". While the text after the slash could still
    become a multi-word variable or tag ("/личный " -> "/личный бюджет"),
    the line keeps waiting. Deletions never convert anything. */
-const SLASH_TASK_RE=/^([ \t]*)\/(\p{L}[\p{L}\d_]*)(?=\s|$)/u;
-function slashTaskAt(lines, row, complete){
+/* The word may be wrapped: "/(текст)", "/«текст»", "/"текст"", "/[текст]"
+   become "[ ] (текст)" etc. With a wrapper the line is finished once the caret
+   has stepped past the matching closer (typing ")" over the auto-inserted one
+   does that) - never while still inside, where "/(личный " may yet become
+   "/(личный бюджет)". Without a wrapper the word must be followed by a space,
+   or the line be left with Enter, as before. Pasted lines count as finished. */
+const SLASH_TASK_RE=/^([ \t]*)\/([(\[{«"']*)(\p{L}[\p{L}\d_]*)/u;
+const TASK_CLOSE={'(':')','[':']','{':'}','«':'»','"':'"',"'":"'"};
+/* Index of the closer matching the opener at `at`, or -1 (same-char quotes: the next one). */
+function matchingCloser(line, at){
+  const o=line[at], c=TASK_CLOSE[o];
+  if(o===c) return line.indexOf(c, at+1);
+  let depth=0;
+  for(let k=at;k<line.length;k++){ if(line[k]===o) depth++; else if(line[k]===c && --depth===0) return k; }
+  return -1;
+}
+function slashTaskAt(lines, row, complete, caretCol){
   const line=lines[row], m=SLASH_TASK_RE.exec(line);
   if(!m) return -1;
-  const i=m[1].length;
-  if(!complete && !/\s/.test(line[i+1+m[2].length]||'')) return -1;     // word still being typed
-  if(tagTriggerLenAt(line,i) || dateTriggerLenAt(line,i) || curCmdAt(line,i)) return -1;
+  const i=m[1].length, open=m[2], wordEnd=i+1+open.length+m[3].length;
+  if(!open && wordEnd<line.length && !/\s/.test(line[wordEnd])) return -1;    // "/a/b", "/слово,": no lone word
+  if(!complete){
+    if(open){ const c=matchingCloser(line, i+1); if(c<0 || (caretCol>i+1 && caretCol<=c)) return -1; }   // caret still between the wrapper's brackets
+    else if(wordEnd>=line.length) return -1;                                  // word still being typed
+  }
+  if(!open && (tagTriggerLenAt(line,i) || dateTriggerLenAt(line,i) || curCmdAt(line,i))) return -1;
   const A=analyze(lines.join('\n'));
-  const vars=A.varsBySection[A.lines[row].section];
-  const rest=line.slice(i+1).toLowerCase();
-  const names=[...(vars||[])].concat((store.tags||[]).map(t=>(t.label||'').toLowerCase()));
+  const vars=[...(A.varsBySection[A.lines[row].section]||[])];
+  const names=open ? vars : vars.concat((store.tags||[]).map(t=>(t.label||'').toLowerCase()));
+  const rest=line.slice(i+1+open.length).toLowerCase();
   for(const v of names){
     if(!v) continue;
-    if(rest.startsWith(v) && !/[\p{L}\d_]/u.test(rest[v.length]||' ')) return -1;   // "/переменная": real division
-    if(!complete && v.startsWith(rest)) return -1;                                   // could still become one
+    if(rest.startsWith(v) && !/[\p{L}\d_]/u.test(rest[v.length]||' ')) return -1;   // "/переменная", "/(переменная…)": real division
+    if(!complete && !open && v.startsWith(rest)) return -1;                        // could still become one
   }
   return i;
 }
+let pasteInfo=null;   // {start} while onPaste's insertText runs: no pairing, pasted lines are finished
 function transformSlashTask(e){
   if(e && e.inputType && (e.inputType.startsWith('delete') || e.inputType.startsWith('history'))) return;
   const val=input.value, caret=input.selectionStart;
   const lines=val.split('\n');
   const row=countLinesBefore(val, caret);
-  // the line being typed (word finished by a space) and, right after Enter,
-  // the line just left (finished by the line break itself)
-  const cands=[[row,false]];
-  if(caret>0 && val[caret-1]==='\n' && row>0) cands.push([row-1,true]);
+  const caretCol=caret-(caret>0 ? val.lastIndexOf('\n', caret-1)+1 : 0);
+  // the line being typed and, right after Enter, the line just left (finished
+  // by the line break itself); after a paste, every pasted line is finished
+  const cands=[];
+  if(pasteInfo){ for(let r=countLinesBefore(val, Math.min(pasteInfo.start, caret)); r<=row; r++) cands.push([r,true]); }
+  else{
+    cands.push([row,false]);
+    if(caret>0 && val[caret-1]==='\n' && row>0) cands.push([row-1,true]);
+  }
   let out=lines, nc=caret, changed=false;
   for(const [r,complete] of cands){
-    const i=slashTaskAt(out, r, complete);
+    const i=slashTaskAt(out, r, complete, r===row ? caretCol : Infinity);
     if(i<0) continue;
     if(out===lines) out=lines.slice();
     out[r]=out[r].slice(0,i)+'[ ] '+out[r].slice(i+1);
@@ -3237,17 +3276,37 @@ function snapCaret(){
      over it and deletes the digit behind it.
    Shared by the keydown handler and soft keyboards' beforeinput; returns
    true when it handled the key. */
-function smartBackspace(word){
+/* mode: 'char' (Backspace), 'word' (Ctrl/Alt/Option+Backspace) or 'line'
+   (Cmd+Backspace on a Mac: to the line's content start, like everywhere else on macOS). */
+function smartBackspace(mode){
+  if(mode===true) mode='word'; else if(!mode) mode='char';
   const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos), v=input.value;
   if(pos<=contentStart && lineStart>0){ commitValue(v.slice(0,lineStart-1)+v.slice(contentStart), lineStart-1); return true; }
   if(pos<=contentStart) return false;
+  if(mode==='line'){ commitValue(v.slice(0,contentStart)+v.slice(pos), contentStart); return true; }
+  const word=(mode==='word');
+  // a word-delete inside / right after "[ ] " takes the checkbox marker whole
+  // (deleting "] " alone would leave a broken "[ текст")
+  if(word){
+    const cb=CB_RE.exec(v.slice(lineStart, v.indexOf('\n',pos)<0 ? v.length : v.indexOf('\n',pos)));
+    if(cb && pos<=lineStart+cb[0].length){ commitValue(v.slice(0,contentStart)+v.slice(Math.max(pos,lineStart+cb[0].length)), contentStart); return true; }
+  }
   const from=clampFromPill(word ? prevWordStart(v,pos,contentStart) : prevCharStart(v,pos,contentStart));
   commitValue(v.slice(0,from)+v.slice(pos), from);
   return true;
 }
-function smartDelete(){
+/* mode: 'char' (Delete), 'word' (Ctrl/Alt/Option+Delete) or 'line' (Cmd+Delete on a Mac). */
+function smartDelete(mode){
   const v=input.value, pos=input.selectionStart;
+  let lineEnd=v.indexOf('\n', pos); if(lineEnd<0) lineEnd=v.length;
   if(v[pos]==='\n'){ const {contentStart}=lineBounds(pos+1); commitValue(v.slice(0,pos)+v.slice(contentStart), pos); return true; }
+  if(mode==='line'){ commitValue(v.slice(0,pos)+v.slice(lineEnd), pos); return true; }
+  if(mode==='word'){
+    let to=nextWordEnd(v, pos, lineEnd);
+    for(const [a,z] of atomicRegions()){ if(to>a && to<z){ to=z; break; } }   // never cut a pill / link in half
+    commitValue(v.slice(0,pos)+v.slice(Math.max(to,pos+1)), pos);
+    return true;
+  }
   if(isFmtWS(v[pos])){
     let to=pos; while(to<v.length && isFmtWS(v[to])) to++;
     if(to<v.length && v[to]!=='\n') to++;
@@ -3255,6 +3314,17 @@ function smartDelete(){
     return true;
   }
   return false;                                       // a plain character: the browser's own delete is fine
+}
+/* End of the next word from `pos`, not crossing the line end - the mirror of
+   prevWordStart, so a grouped number ("12 345") is one word here too. */
+function nextWordEnd(s, pos, ceil){
+  let i=pos;
+  while(i<ceil && /\s/.test(s[i])) i++;
+  if(i<ceil){
+    if(/[\p{L}\p{N}_]/u.test(s[i])) while(i<ceil && (/[\p{L}\p{N}_]/u.test(s[i]) || (isFmtWS(s[i]) && /\p{N}/u.test(s[i+1]||'')))) i++;
+    else while(i<ceil && !/[\p{L}\p{N}_\s]/u.test(s[i])) i++;
+  }
+  return i;
 }
 /* Start of the previous word from `pos`, not crossing the visual line start.
    A grouped number ("12 345") is one word: grouping between digits is part of it. */
@@ -3366,8 +3436,6 @@ function onEditorKeydown(e){
   if(mod && (e.key==='y'||e.key==='Y' || e.key==='н'||e.key==='Н')){ e.preventDefault(); doRedo(); return; }
   // find bar
   if(mod && (e.key==='f'||e.key==='F' || e.key==='а'||e.key==='А')){ e.preventDefault(); openFind(); return; }
-  // bold (any layout: the physical B key)
-  if(mod && !e.altKey && (e.code==='KeyB' || e.key==='b'||e.key==='B'||e.key==='и'||e.key==='И')){ e.preventDefault(); toggleBold(); return; }
 
   const collapsed=input.selectionStart===input.selectionEnd;
 
@@ -3406,8 +3474,9 @@ function onEditorKeydown(e){
     commitValue(v.slice(0,pos-1)+v.slice(pos+1), pos-1);
     return;
   }
-  if(e.key==='Backspace' && !e.shiftKey && collapsed && smartBackspace(e.ctrlKey||e.altKey||e.metaKey)){ e.preventDefault(); return; }
-  if(e.key==='Delete' && !e.shiftKey && collapsed && !(e.ctrlKey||e.altKey||e.metaKey) && smartDelete()){ e.preventDefault(); return; }
+  const delMode = e.metaKey ? 'line' : (e.ctrlKey||e.altKey) ? 'word' : 'char';   // Cmd = line, Ctrl/Alt/Option = word
+  if(e.key==='Backspace' && !e.shiftKey && collapsed && smartBackspace(delMode)){ e.preventDefault(); return; }
+  if(e.key==='Delete' && !e.shiftKey && collapsed && smartDelete(delMode)){ e.preventDefault(); return; }
   if(e.key==='ArrowLeft' && !e.shiftKey && collapsed){
     const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos);
     if(pos<=contentStart && lineStart>0){ e.preventDefault(); input.setSelectionRange(lineStart-1,lineStart-1); return; }
@@ -3416,55 +3485,6 @@ function onEditorKeydown(e){
     const {contentStart}=lineBounds(input.selectionStart);
     e.preventDefault(); input.setSelectionRange(contentStart,contentStart); return;
   }
-}
-
-/* ---------- Ctrl/Cmd+B: toggle bold, like a text editor ----------
-   With a selection: if it is already bold (markers just outside it, or the
-   selection includes them) the markers are removed; otherwise each selected
-   line's text (trimmed - "** x**" wouldn't be bold) is wrapped in "**…**".
-   The text stays selected either way.
-   Without a selection, inside a bold run: at its end the caret steps out past
-   the closing "**" (stop typing bold); in an empty "****" the pair is removed;
-   anywhere else in the run, the run is un-bolded. Outside bold: "****" is
-   inserted with the caret in the middle, so what is typed next is bold.
-   Every change goes through commitValue, so one Ctrl+Z undoes it. */
-function toggleBold(){
-  const v=input.value, s=input.selectionStart, e=input.selectionEnd;
-  const select=(a,b)=>{ const n=input.value.length; input.setSelectionRange(Math.min(a,n), Math.min(b,n)); };
-  if(s===e){
-    const ls=v.lastIndexOf('\n', s-1)+1; let le=v.indexOf('\n', s); if(le<0) le=v.length;
-    const line=v.slice(ls,le), col=s-ls;
-    BOLD_RE.lastIndex=0; let m;
-    while((m=BOLD_RE.exec(line))){
-      const a=m.index, z=a+m[0].length;
-      if(col<a+2 || col>z-2) continue;                                        // caret not inside this run
-      if(m[1]===''){ commitValue(v.slice(0,ls+a)+v.slice(ls+z), ls+a); return; }    // empty "****": drop it
-      if(col===z-2){ input.setSelectionRange(ls+z, ls+z); return; }               // at its end: step out
-      commitValue(v.slice(0,ls+a)+m[1]+v.slice(ls+z), s-2); return;              // inside: un-bold the run
-    }
-    commitValue(v.slice(0,s)+'****'+v.slice(s), s+2);
-    return;
-  }
-  const sel=v.slice(s,e);
-  if(!sel.includes('\n') && v.slice(s-2,s)==='**' && v.slice(e,e+2)==='**'){      // markers just outside
-    commitValue(v.slice(0,s-2)+sel+v.slice(e+2), s-2); select(s-2, e-2); return;
-  }
-  if(!sel.includes('\n') && sel.length>=4 && sel.startsWith('**') && sel.endsWith('**')){   // markers selected too
-    commitValue(v.slice(0,s)+sel.slice(2,-2)+v.slice(e), s); select(s, e-4); return;
-  }
-  const parts=sel.split('\n');
-  const BOLD_PART=/^(\s*)\*\*(?!\s)(.*?)(?<!\s)\*\*(\s*)$/;
-  if(parts.length>1 && parts.some(p=>p.trim()) && parts.every(p=>!p.trim() || BOLD_PART.test(p))){   // every line already bold
-    const un=parts.map(p=>p.replace(BOLD_PART,'$1$2$3')).join('\n');
-    commitValue(v.slice(0,s)+un+v.slice(e), s); select(s, s+un.length); return;
-  }
-  const wrapped=parts.map(part=>{
-    const m=/^(\s*)(.*?)(\s*)$/.exec(part);
-    return m[2] ? m[1]+'**'+m[2]+'**'+m[3] : part;
-  }).join('\n');
-  commitValue(v.slice(0,s)+wrapped+v.slice(e), s);
-  if(parts.length===1){ const lead=/^\s*/.exec(sel)[0].length, core=sel.trim().length; select(s+lead+2, s+lead+2+core); }   // keep the TEXT selected
-  else select(s, s+wrapped.length);
 }
 
 /* ---------- undo / redo (native history is lost to programmatic formatting) ---------- */
@@ -3501,21 +3521,38 @@ const PAIR_CLOSE={'(':')','[':']','{':'}','«':'»','"':'"',"'":"'"};
 const PAIR_CLOSERS=new Set([')',']','}','»','"',"'"]);
 function isEmptyPairAt(v, pos){ const o=v[pos-1]; return !!PAIR_CLOSE[o] && v[pos]===PAIR_CLOSE[o]; }
 function autoPair(e){
-  if(!e.cancelable) return false;                     // can't stop the browser's own edit: leave it alone
+  if(!e.cancelable || pasteInfo) return false;        // can't stop the browser's own edit / a paste: leave it alone
   const v=input.value, s=input.selectionStart, en=input.selectionEnd;
   // Soft keyboards (Android) send no usable keydown, so Backspace / Delete
   // arrive only here: route them through the same logic as the keyboard.
   if(e.inputType==='deleteContentBackward'){
     if(s!==en) return false;
     if(isEmptyPairAt(v,s)){ commitValue(v.slice(0,s-1)+v.slice(s+1), s-1); return true; }
-    return smartBackspace(false);
+    return smartBackspace('char');
   }
-  if(e.inputType==='deleteContentForward'){ return s===en && smartDelete(); }
+  if(e.inputType==='deleteContentForward'){ return s===en && smartDelete('char'); }
+  if(s===en && (e.inputType==='deleteWordBackward')) return smartBackspace('word');
+  if(s===en && (e.inputType==='deleteSoftLineBackward' || e.inputType==='deleteHardLineBackward')) return smartBackspace('line');
+  if(s===en && (e.inputType==='deleteWordForward')) return smartDelete('word');
+  if(s===en && (e.inputType==='deleteSoftLineForward' || e.inputType==='deleteHardLineForward')) return smartDelete('line');
+  // Enter right before the line's own auto-closers ("/(позвонить|)") jumps out
+  // past them, so the closer stays on its line instead of being split off.
+  // Assignment lines keep the plain split: "итого = (1000 +" ↵ "500)" is a
+  // real multi-line expression.
+  if((e.inputType==='insertLineBreak' || e.inputType==='insertParagraph') && s===en){
+    const ls=s>0 ? v.lastIndexOf('\n', s-1)+1 : 0; let le=v.indexOf('\n', s); if(le<0) le=v.length;
+    const line=v.slice(ls,le);
+    if(!trailingAutoClosers(line, s-ls) || assignHead(line)) return false;
+    input.value=v.slice(0,le)+'\n'+v.slice(le); input.setSelectionRange(le+1,le+1);
+    onInput({inputType:'insertLineBreak'});
+    return true;
+  }
   if(e.inputType!=='insertText' || !e.data || e.data.length!==1) return false;
   const ch=e.data, close=PAIR_CLOSE[ch];
   if(s!==en){
     if(!close) return false;
     const sel=v.slice(s,en);
+    if(sel.includes('\n')) return false;              // a multi-line selection (Ctrl+A…) is replaced, not wrapped
     input.value=v.slice(0,s)+ch+sel+close+v.slice(en); input.setSelectionRange(en+1,en+1);
     onInput({inputType:'insertText', data:ch});
     // keep the wrapped text selected when formatting left it in place
@@ -3523,14 +3560,44 @@ function autoPair(e){
     if(at>=0 && at<=s+2) input.setSelectionRange(at+1, at+1+sel.length);
     return true;
   }
-  if(PAIR_CLOSERS.has(ch) && v[s]===ch){ input.setSelectionRange(s+1,s+1); return true; }   // type over the closer
+  if(PAIR_CLOSERS.has(ch) && v[s]===ch){                                                  // type over the closer
+    input.setSelectionRange(s+1,s+1);
+    // ...which can finish a "/(текст)" line: run that check (only it - no text was typed)
+    const before=input.value; transformSlashTask({inputType:'insertText', data:ch});
+    if(input.value!==before){ autoIndent(); applyMask(); onChange(); }
+    return true;
+  }
   if(!close) return false;
   const next=v[s]||'', prev=v[s-1]||'';
   if(next && !/[\s)\]}»"',.;:]/.test(next)) return false;
   if((ch==='"'||ch==="'") && /[\p{L}\d_]/u.test(prev)) return false;
   input.value=v.slice(0,s)+ch+close+v.slice(s); input.setSelectionRange(s+1,s+1);
+  if(ch==='(') pairPending=true;                       // see render(): not a round marker while typed into
   onInput({inputType:'insertText', data:ch});
   return true;
+}
+let pairPending=false;
+/* True when everything after `col` on the line is closers that close openers
+   earlier on the same line (in order) - i.e. what autoPair put there. */
+function trailingAutoClosers(line, col){
+  const rest=line.slice(col);
+  if(!rest || !/^[)\]}»"']+$/.test(rest)) return false;
+  const want=[];                                        // expected closers, innermost last
+  for(const ch of line.slice(0,col)){
+    if(ch==='"' || ch==="'"){ if(want[want.length-1]===ch) want.pop(); else want.push(ch); }
+    else if(PAIR_CLOSE[ch]) want.push(PAIR_CLOSE[ch]);
+    else if(ch===want[want.length-1]) want.pop();
+  }
+  for(const ch of rest) if(want.pop()!==ch) return false;
+  return true;
+}
+/* Once the caret leaves an auto-closed "()" it is a real round marker (if still
+   empty): re-render so its line rounds. */
+function onPairCaretMove(){
+  if(!pairPending) return;
+  const v=input.value, c=input.selectionStart;
+  if(document.activeElement===input && c===input.selectionEnd && v[c-1]==='(' && v[c]===')') return;
+  pairPending=false; render();
 }
 function restoreHistory(st){
   suppressHistory=true;
@@ -4235,6 +4302,10 @@ function onPaste(e){
   const txt=(e.clipboardData||window.clipboardData).getData('text');
   if(!txt) return;
   e.preventDefault();
+  // execCommand fires no beforeinput, so the undo snapshot onBeforeInput would
+  // take never happens: take it here, making the paste its own undo step
+  // (otherwise Ctrl+Z jumped past it and also dropped what was typed before).
+  if(!suppressHistory){ pushHistory(histState()); clearTimeout(undoTimer); undoTimer=null; lastInputType='insertFromPaste'; }
   // Pasting a result you just copied from the column drops it as a distinct,
   // atomic PILL entity (SENT + number) rather than loose text — it still
   // reads as a number for math, but edits/deletes as one unit and is outlined.
@@ -4243,7 +4314,8 @@ function onPaste(e){
     return;
   }
   const normalized=normalizePasted(txt);
-  document.execCommand('insertText',false,normalized);
+  pasteInfo={start:input.selectionStart};
+  try{ document.execCommand('insertText',false,normalized); } finally{ pasteInfo=null; }
 }
 /* Pasted text is normalized line-by-line, but any URL run within a line is
    passed through untouched: normalizeNumberRun() below happily inserts a
@@ -5055,7 +5127,7 @@ function exportStyleBlock(){
     .num{color:${c('--num')}} .op{color:${c('--op')}} .opx{color:${c('--op-work')};font-weight:600}
     .brk0{color:${c('--brk0')};font-weight:600} .brk1{color:${c('--brk1')};font-weight:600} .brk2{color:${c('--brk2')};font-weight:600}
     .date{color:${c('--date')};font-weight:500} .label{color:${c('--label')};font-weight:500}
-    .quote{color:${c('--super')}} .super{color:${c('--super')};font-weight:700} .b{font-weight:700} .bmark{display:none} .header{color:${c('--comment')}}
+    .quote{color:${c('--super')}} .super{color:${c('--super')};font-weight:700} .header{color:${c('--comment')}}
     .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--cbox')};font-weight:600}
     .varu{background:${c('--pill-hover-bg')};border-radius:5px;padding:0 2px}
     td.lcell.superrow{background:${c('--super-soft')};border-radius:5px}
@@ -5146,7 +5218,7 @@ async function openSharedView(){
   let data=null;
   if(m){ try{ data=JSON.parse(await b64ToText(decodeURIComponent(m[1]))); }catch(e){ data=null; } }
   if(!data || typeof data.t!=='string'){ initAuth(); return; }   // bad link -> normal app
-  if((data.m|0)<MARKUP_V) data.t=convertLegacyMarkup(data.t);       // link made before the "#"/"//" swap
+  if((data.m|0)<MARKUP_V) data.t=upgradeMarkup(data.t, data.m|0);   // link made by an older build
   sharedMode=true;
   hideAuthGate();
   input.value=data.t; input.readOnly=true;
@@ -5223,6 +5295,7 @@ function boot(){
   document.addEventListener('selectionchange', renderCaret);       // block caret + empty-line ghost
   document.addEventListener('selectionchange', updateBracketMatch); // matching-bracket highlight
   document.addEventListener('selectionchange', ()=>renderRails());   // section rail follows the caret
+  document.addEventListener('selectionchange', onPairCaretMove);      // auto-closed "()" left -> round marker
   input.addEventListener('focus', ()=>renderRails());
   input.addEventListener('blur', ()=>setTimeout(()=>renderRails(),0));
   input.addEventListener('blur', ()=>{ if(sellayer) sellayer.innerHTML=''; });   // drop the overlay when focus leaves
