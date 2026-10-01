@@ -2129,10 +2129,16 @@ function formatAll(text, caret){ return spaceOps(regroupText(text, caret)); }
 
 /* Apply masking to the textarea, preserving caret by counting core chars. */
 function applyMask(){
-  const val=input.value;
+  let val=input.value;
   const caret=input.selectionStart;
+  // An empty "()" with the caret inside is a bracket pair being typed (see
+  // autoPair), not the round marker yet: a placeholder inside hides it from
+  // the "()" padding, so "1343(" -> "1343(2)" leaves no stray space behind.
+  const hole=(val[caret-1]==='(' && val[caret]===')');
+  if(hole) val=val.slice(0,caret)+'\uE000'+val.slice(caret);
   const coreBefore=countNonSep(val, caret);
-  const masked=formatAll(val, caret);
+  let masked=formatAll(val, caret);
+  if(hole){ masked=masked.replace('\uE000',''); val=input.value; }
   if(masked===val) return;
   const newCaret=posAfterNonSep(masked, coreBefore);
   input.value=masked;
@@ -3385,6 +3391,12 @@ function onEditorKeydown(e){
     }
   }
 
+  if(e.key==='Backspace' && !e.shiftKey && collapsed && !(e.ctrlKey||e.altKey||e.metaKey) && isEmptyPairAt(input.value, input.selectionStart)){
+    e.preventDefault();                               // "(|)" -> "|": both halves of an empty pair
+    const v=input.value, pos=input.selectionStart;
+    commitValue(v.slice(0,pos-1)+v.slice(pos+1), pos-1);
+    return;
+  }
   if(e.key==='Backspace' && !e.shiftKey && collapsed){
     const pos=input.selectionStart, {lineStart,contentStart}=lineBounds(pos);
     if(pos<=contentStart && lineStart>0){          // at (visual) line start → merge up
@@ -3429,6 +3441,58 @@ function onBeforeInput(e){
   if(boundary) pushHistory(histState());          // snapshot pre-change state at burst boundaries
   lastInputType=e.inputType||'';
   clearTimeout(undoTimer); undoTimer=setTimeout(()=>{ undoTimer=null; }, 600);
+  if(!composing && autoPair(e)) e.preventDefault();
+}
+
+/* ---------- auto-closing brackets and quotes (code-editor style) ----------
+   Typing an opener inserts its closer too, caret in between: "(" -> "(|)".
+   - only before whitespace, end of line, a closer or punctuation - typed in
+     front of a word it stays single, so wrapping existing text by hand works;
+   - a quote right after a letter/digit is a closing quote or an apostrophe
+     ("don't", слово"), so it is never paired there;
+   - typing a closer that is already the next character steps over it;
+   - with text selected, an opener wraps the selection in the pair;
+   - Backspace between an empty pair deletes both halves (see also the
+     keydown Backspace branch, which handles it on desktop).
+   Runs from beforeinput, which phones deliver reliably (keydown there often
+   reports "Unidentified"), and re-enters the normal input pipeline itself. */
+const PAIR_CLOSE={'(':')','[':']','{':'}','«':'»','"':'"',"'":"'"};
+const PAIR_CLOSERS=new Set([')',']','}','»','"',"'"]);
+function isEmptyPairAt(v, pos){ const o=v[pos-1]; return !!PAIR_CLOSE[o] && v[pos]===PAIR_CLOSE[o]; }
+function autoPair(e){
+  const v=input.value, s=input.selectionStart, en=input.selectionEnd;
+  if(e.inputType==='deleteContentBackward'){
+    if(s!==en || !isEmptyPairAt(v,s)) return false;
+    input.value=v.slice(0,s-1)+v.slice(s+1); input.setSelectionRange(s-1,s-1);
+    onInput({inputType:'deleteContentBackward'});
+    return true;
+  }
+  if(e.inputType!=='insertText' || !e.data || e.data.length!==1) return false;
+  const ch=e.data, close=PAIR_CLOSE[ch];
+  if(s!==en){
+    if(!close) return false;
+    const sel=v.slice(s,en);
+    input.value=v.slice(0,s)+ch+sel+close+v.slice(en); input.setSelectionRange(en+1,en+1);
+    onInput({inputType:'insertText', data:ch});
+    // keep the wrapped text selected when formatting left it in place
+    const at=input.value.indexOf(ch+sel+close, Math.max(0,s-2));
+    if(at>=0 && at<=s+2) input.setSelectionRange(at+1, at+1+sel.length);
+    return true;
+  }
+  if(PAIR_CLOSERS.has(ch) && v[s]===ch){                                                  // type over the closer
+    input.setSelectionRange(s+1,s+1);
+    // stepping out of an empty "()" turns it into the round marker: let the
+    // formatter pad it now (no text was typed, so only re-save if it changed)
+    const before=input.value; applyMask(); if(input.value!==before) onChange();
+    return true;
+  }
+  if(!close) return false;
+  const next=v[s]||'', prev=v[s-1]||'';
+  if(next && !/[\s)\]}»"',.;:]/.test(next)) return false;
+  if((ch==='"'||ch==="'") && /[\p{L}\d_]/u.test(prev)) return false;
+  input.value=v.slice(0,s)+ch+close+v.slice(s); input.setSelectionRange(s+1,s+1);
+  onInput({inputType:'insertText', data:ch});
+  return true;
 }
 function restoreHistory(st){
   suppressHistory=true;
