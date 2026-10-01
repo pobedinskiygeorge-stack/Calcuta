@@ -2435,6 +2435,8 @@ function normalizeStoreDocs(s){
     if(typeof d.text==='string') d.text=unpadOps(d.text);
     // line numbers (and the per-line colours assigned through them) are gone
     delete d.lineColors;
+    // a "#" heading always has a space before its title
+    if(typeof d.text==='string') d.text=d.text.replace(/^([ \t]*)#(?=\S)/gm, '$1# ');
   });
 }
 
@@ -3030,12 +3032,32 @@ function transformSlashSpace(){
   }
 }
 
+/* A "#" heading always has a space between the marker and its title:
+   "#Бюджет" -> "# Бюджет", on every line (typed, pasted or programmatic), and
+   a "#" just typed as the first character of a line gets its space at once,
+   so the caret lands where the title goes. Deletions never re-add it, so the
+   user can always backspace the space and then the "#" itself; the next
+   insertion restores it if a title is still glued to the marker. */
+function transformHashSpace(e){
+  if(e && e.inputType && e.inputType.startsWith('delete')) return;
+  let val=input.value, caret=input.selectionStart, shift=0;
+  val=val.replace(/^([ \t]*)#(?=\S)/gm, (m,ind,off)=>{ if(off+m.length<=caret) shift++; return ind+'# '; });
+  caret+=shift;
+  if(e && e.data==='#'){
+    const ls=val.lastIndexOf('\n', caret-1)+1;
+    let le=val.indexOf('\n', caret); if(le<0) le=val.length;
+    if(caret===le && /^[ \t]*#$/.test(val.slice(ls,le))){ val=val.slice(0,caret)+' '+val.slice(caret); caret++; }
+  }
+  if(val!==input.value){ input.value=val; input.setSelectionRange(caret,caret); }
+}
+
 /* ---------- main change handler ---------- */
 let composing=false;
-function onInput(){
+function onInput(e){
   if(composing) return;
   transformDoubleplus();
   transformSlashSpace();
+  transformHashSpace(e);
   autoIndent();
   applyMask();
   onChange();
