@@ -208,6 +208,31 @@ const CASES = [
   check(ms.stale === 'new', 'mergeStores: a late, older server copy is not taken as news', JSON.stringify(ms));
   check(ms.rename[0] === 'Новое имя' && ms.rename[1] === 'a (remote)\nb\nc', 'mergeStores: rename on one device + edit on another', JSON.stringify(ms));
 
+  // ---- live merge into the open editor: lines added above the caret elsewhere ----
+  const live = await page.evaluate(async () => {
+    const K = window.__calcuta, S = K.__syncTest;
+    const text = Array.from({ length: 200 }, (_, i) => 'строка ' + i).join('\n');
+    S.setStore({ docs: [{ id: 'stock-tasks', name: 'Задачи', protected: 'tasks', text, updated: 1000, markup: K.MARKUP_V },
+                        { id: 'stock-personal', name: 'Личное', protected: 'personal', text: '', updated: 1000, markup: K.MARKUP_V }],
+                 activeId: 'stock-tasks', tags: [], tagsUpdated: 0, deletedDocs: {}, deletedTags: {}, pinned: [] });
+    S.setBases({ 'stock-tasks': { text, name: 'Задачи', updated: 1000 }, 'stock-personal': { text: '', name: 'Личное', updated: 1000 } });
+    const el = document.getElementById('input'), ed = document.getElementById('editor');
+    el.focus(); const pos = text.indexOf('строка 150') + 3; el.setSelectionRange(pos, pos);
+    await new Promise(r => setTimeout(r, 50));
+    const caret = () => { const c = document.querySelector('.caret-block'); return c ? Math.round(c.getBoundingClientRect().top) : null; };
+    ed.scrollTop += caret() - ed.getBoundingClientRect().top - 300;
+    await new Promise(r => setTimeout(r, 50));
+    const before = caret();
+    S.reconcileRemote({ docs: [{ id: 'stock-tasks', name: 'Задачи', protected: 'tasks', text: Array.from({ length: 30 }, (_, i) => 'новая ' + i).join('\n') + '\n' + text.replace('строка 199', 'строка 199!'), updated: 5000, markup: K.MARKUP_V },
+                               { id: 'stock-personal', name: 'Личное', protected: 'personal', text: '', updated: 1000, markup: K.MARKUP_V }],
+                        tags: [], tagsUpdated: 0, deletedDocs: {}, deletedTags: {} });
+    await new Promise(r => setTimeout(r, 50));
+    const c = el.selectionStart;
+    return { before, after: caret(), at: el.value.slice(c - 3, c + 7), merged: el.value.startsWith('новая 0') && el.value.endsWith('строка 199!') };
+  });
+  check(live.merged && live.at === 'строка 150' && live.before === live.after,
+        'live merge: caret stays on the same text AND at the same height on screen when lines are added above', JSON.stringify(live));
+
   await browser.close();
   console.log(fails ? `\n${fails} of ${checks} merge checks FAILED` : `\nALL ${checks} MERGE CHECKS PASSED`);
   process.exit(fails ? 1 : 0);

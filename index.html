@@ -2360,6 +2360,9 @@ function observeStore(s){
    the same localStorage blob as the store (key "_bases"), so the two can
    never be read out of step with each other. */
 let docBases={}, docBasesUid=null;   // bases belong to one account's cloud copy
+/* No session has ever existed on this device and it holds no bases: its
+   documents share no history with the account's (see unionDoc). */
+let neverSynced=false;
 /* test hook (tests/devicesim.js): a timeline of sync events, never set in the app */
 function syncTrace(ev, data){ if(window.__calcutaSyncLog) try{ window.__calcutaSyncLog(ev, data); }catch(e){} }
 /* The raw blob this tab last wrote or read. If localStorage holds anything
@@ -2568,6 +2571,7 @@ function load(){
   }
   if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
 
+  neverSynced=!docBasesUid && !Object.keys(docBases).length && !wasSignedIn();
   observeStore(store);   // seed the logical clock past everything already stored
   window.__calcutaSyncLog && syncTrace('load', {store:store.docs.map(d=>[d.id,d.text,d.updated]), bases:docBases});
 
@@ -5064,9 +5068,9 @@ function lwwDoc(a,b){
 // `next` makes the stamp for a merged result; normally the logical clock.
 function bumpPast(L,R,next){ return (L.updated||0)>(R.updated||0) ? L : Object.assign({}, L, {updated:next(L,R)}); }
 const clockStamp=()=>stamp();
-function mergeDoc(L, R, b, next){
+function mergeDoc(L, R, b, next, union){
   next=next||clockStamp;
-  if(!b) return lwwDoc(L,R);
+  if(!b) return (union && (L.updated||0)>0 && (R.updated||0)>0 && (L.text||'')!==(R.text||'')) ? unionDoc(L,R,next) : lwwDoc(L,R);
   const bt=b.text||'', bn=b.name||'';
   const lt=(L.text||'')!==bt, ln=(L.name||'')!==bn;
   // a server copy OLDER than the base is a late, superseded delivery (an
@@ -5083,10 +5087,36 @@ function mergeDoc(L, R, b, next){
   return Object.assign({}, lNewer?L:R, {text, name, updated:next(L,R)});
 }
 
+/* A device that has never synced meets the account's copy of a document
+   (it was used before signing in): the two have no shared history, so
+   neither is "newer" — keep the account's text and add every line the
+   device wrote that it lacks. (Last-writer-wins replaced the account's
+   tasks with the new phone's on every device.) Untouched lines of the
+   stock sample are not the user's writing and are left out. */
+function unionDoc(L, R, next){
+  const bare=x=>x.replace(/[\s\u00a0\u202f\u2009]+/g,'');   // the app indents and groups digits
+  const sample=new Set(L.protected==='tasks' ? DEFAULT_DOC.split('\n').map(bare).filter(Boolean) : []);
+  const rl=(R.text||'').split('\n'), rs=new Set(rl);
+  const ll=(L.text||'').split('\n').filter(x=>rs.has(x) || !sample.has(bare(x)));
+  if(!ll.some(x=>x.trim()!=='' && !rs.has(x))) return R;     // nothing of its own beyond the account copy
+  // line union along the LCS: in every gap, the account's lines first, then
+  // the device's own (blank ones dropped)
+  const mt=lcsMatch(ll, rl), out=[]; let j=0, mine=[];
+  for(let i=0;i<ll.length;i++){
+    if(mt[i]<0){ if(ll[i].trim()) mine.push(ll[i].replace(/^[ \t]+/,'')); continue; }   // indent is the app's, recomputed from headings
+    while(j<mt[i]) out.push(rl[j++]);
+    out.push(...mine); mine=[];
+    out.push(rl[j++]);
+  }
+  while(j<rl.length) out.push(rl[j++]);
+  out.push(...mine);
+  return Object.assign({}, R, {text:out.join('\n'), updated:next(L,R)});
+}
+
 /* Merge two stores. With `bases` (id -> base) documents changed on both
    sides are merged three-way; without, per-doc last-writer-wins
    (deterministic and commutative). */
-function mergeStores(local, remote, bases, next){
+function mergeStores(local, remote, bases, next, union){
   local=local||{}; remote=remote||{};
   const tomb={};
   const addTomb=m=>{ if(m&&typeof m==='object') for(const id in m) tomb[id]=Math.max(tomb[id]||0, m[id]||0); };
@@ -5100,7 +5130,7 @@ function mergeStores(local, remote, bases, next){
   const byId=side(local.docs);
   for(const [id,r] of side(remote.docs)){
     const l=byId.get(id);
-    byId.set(id, !l ? r : bases ? mergeDoc(l, r, bases[id], next) : lwwDoc(l, r));
+    byId.set(id, !l ? r : bases ? mergeDoc(l, r, bases[id], next, union) : lwwDoc(l, r));
   }
 
   const docs=[];
@@ -5306,14 +5336,22 @@ function applyStore(next){
     loadActiveIntoEditor();               // the open doc was deleted elsewhere: show the fallback
   }else{
     const d=doc(), t=d.text||'';
+    let anchorY=null, a=0;
     if(t!==oldVal){
-      const a=mapOffset(oldVal, t, s0), b=(s1===s0) ? a : mapOffset(oldVal, t, s1);
+      // where the caret sits on screen now: lines added above it elsewhere
+      // must not push the text being typed down the screen
+      if(focused) anchorY=caretClientTop(s0);
+      a=mapOffset(oldVal, t, s0); const b=(s1===s0) ? a : mapOffset(oldVal, t, s1);
       input.value=t;
       if(focused) input.setSelectionRange(a, b);
       autoIndent(); applyMask();
       if(d.text!==input.value) d.text=input.value;   // formatting is not an edit
     }
     render(); renderDocs();
+    if(anchorY!=null){
+      const y=caretClientTop(input.selectionStart, true);
+      if(y!=null && y!==anchorY) editor.scrollTop+=y-anchorY;
+    }
   }
   const changes=new Map();
   for(const d of store.docs){
@@ -5322,6 +5360,18 @@ function applyStore(next){
   }
   rebaseHistories(changes);
   saveLocal();
+}
+
+/* Caret top in client pixels, or null when it is not on screen (unless
+   `anywhere`). */
+function caretClientTop(off, anywhere){
+  try{
+    const {row,col}=offsetToLineCol(off); const cell=caretCellRect(row,col);
+    if(!cell) return null;
+    if(anywhere) return cell.top;
+    const r=editor.getBoundingClientRect();
+    return (cell.top>=r.top && cell.top<=r.bottom) ? cell.top : null;
+  }catch(e){ return null; }
 }
 
 /* A HARD SAVE from another device (higher forceEpoch) means "make every
@@ -5350,11 +5400,12 @@ function reconcileRemote(remote){
   if((remote.forceEpoch||0) > (store.forceEpoch||0)){
     diverged=adoptForced(remote);
   }else{
-    const merged=mergeStores(store, remote, docBases);
+    const merged=mergeStores(store, remote, docBases, undefined, neverSynced);
     setBases(remote);
     applyStore(merged);
     diverged=syncPayload(store)!==syncPayload(remote);
   }
+  neverSynced=false;
   if(remote.__pending) diverged=true;       // fold close-flush entries in for good
   if(!diverged) lastSyncedPayload=syncPayload(store);   // cloud already has everything → clean
   return diverged;
@@ -5459,7 +5510,7 @@ function resubscribe(){
    (a wedged connection after sleep) is abandoned after SYNC_T.pullTimeout
    and retried with backoff; it used to block every later read for good. */
 let serverPullInflight=false, pullSeq=0, pullStartedAt=0, pullRetryTimer=null, pullBackoff=0;
-function refreshFromServer(){
+function refreshFromServer(reason){
   if(!db||!currentUser||!cloudRef) return;
   if(serverPullInflight && Date.now()-pullStartedAt<SYNC_T.pullTimeout) return;
   const seq=++pullSeq;
@@ -5481,7 +5532,11 @@ function refreshFromServer(){
     // even a late answer is real server data: merging it is safe (stale
     // copies are recognised per document), so it is never thrown away
     if(!snap.exists){ if(!cloudReady) cloudReady=true; if(isStoreDirty()) pushCloud(); return; }
+    const before=syncPayload(store);
     handleRemoteRaw(snap.data());
+    // a routine re-read that finds news means the live listener missed it
+    // (a socket that died without an error): open a new one
+    if(reason==='beat' && syncPayload(store)!==before) resubscribe();
   }, ()=>{ clearTimeout(timer); fail(); });
 }
 
@@ -5717,12 +5772,19 @@ function onSyncWake(){
   if(cloudReady && isStoreDirty()) pushCloud();
 }
 /* Heartbeat (every 10s): the server is re-read when it has been silent too
-   long, and an unsynced store is re-pushed even if every timer was lost. */
+   long, and an unsynced store is re-pushed even if every timer was lost.
+   A long gap between two beats while the page stayed "visible" means the
+   machine slept (a closed laptop lid often fires no visibilitychange at
+   all): treat it as a wake-up — re-read now and re-open the listener,
+   whose socket rarely survives the sleep. */
+let lastBeatAt=Date.now();
 function syncHeartbeat(){
+  const now=Date.now(), gap=now-lastBeatAt; lastBeatAt=now;
+  if(gap>30000 && document.visibilityState==='visible'){ hiddenAt=now-gap; onSyncWake(); }
   maybeReloadForUpdate();
   if(!currentUser||!cloudRef||protoBlocked) return;
   if(document.visibilityState!=='visible' || !navigator.onLine) return;
-  if(Date.now()-serverSeenAt>SYNC_T.pullEvery) refreshFromServer();
+  if(Date.now()-serverSeenAt>SYNC_T.pullEvery) refreshFromServer('beat');
   if(cloudReady && !pushInflight && !hardInflight && !cloudSaveTimer && !pushRetryTimer && isStoreDirty()) pushCloud();
   if(Date.now()-swCheckAt>3600e3) checkAppUpdate();
 }

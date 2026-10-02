@@ -121,6 +121,26 @@ const scenarios = {
     return { ok: ok && has(s, '(A while B off)', '(B before network)'), detail: 'server: ' + JSON.stringify(s) };
   },
 
+  async 'new device used BEFORE signing in: its notes and the account\'s notes both survive the first sign-in'(sim) {
+    const A = await sim.device('A'); await sleep(1200);
+    await A.edit('stock-tasks', 'задача из облака 1\nзадача из облака 2');
+    await A.edit('stock-personal', 'личное из облака');
+    await sleep(1500);
+    const C = await sim.device('C', { signedOut: true }); await sleep(1500);
+    // on the phone: one task typed under the stock sample, one note
+    await C.edit('stock-tasks', (await C.text('stock-tasks')) + '\nзадача с нового телефона');
+    await C.edit('stock-personal', 'личное с нового телефона');
+    await sleep(800);
+    const before = sim.server.text('stock-tasks');
+    await C.signIn();
+    await sleep(2500);
+    const ok = await sim.converge([A, C], 20000);
+    const t = sim.server.text('stock-tasks'), p = sim.server.text('stock-personal');
+    return { ok: ok && before === 'задача из облака 1\nзадача из облака 2' && t === 'задача из облака 1\nзадача из облака 2\nзадача с нового телефона'
+                 && p === 'личное из облака\nличное с нового телефона',
+             detail: 'tasks: ' + JSON.stringify(t) + ' personal: ' + JSON.stringify(p) };
+  },
+
   async 'clock 1 day BEHIND: its edit is not lost to an older remote one'(sim) {
     const { A, B } = await pair(sim, { skew: -86400000 });
     await B.goOffline();
@@ -154,6 +174,36 @@ const scenarios = {
     await A.edit('stock-tasks', mark(BASE, 1, ' (A after B lost its listener)'));
     const ok = await sim.converge([A, B], 30000);
     return { ok: ok && has(await B.text('stock-tasks'), '(A after B lost'), detail: JSON.stringify(await B.text('stock-tasks')) };
+  },
+
+  async 'laptop lid closed (no visibility events), listener died silently: caught up within seconds, live again'(sim) {
+    const { A, B } = await pair(sim);
+    await B.silenceListener();
+    await B.lidSleep(2 * 3600e3);
+    await A.edit('stock-tasks', mark(BASE, 0, ' (A while lid closed)'));
+    await sleep(1500);
+    await B.lidWake();
+    const t0 = Date.now();
+    let first = false;
+    while (Date.now() - t0 < 25000) { if (has(await B.text('stock-tasks'), '(A while lid closed)')) { first = true; break; } await sleep(250); }
+    const catchUp = Date.now() - t0;
+    await A.edit('stock-tasks', mark(mark(BASE, 0, ' (A while lid closed)'), 1, ' (A after)'));
+    const t1 = Date.now(); let live = false;
+    while (Date.now() - t1 < 8000) { if (has(await B.text('stock-tasks'), '(A after)')) { live = true; break; } await sleep(200); }
+    return { ok: first && catchUp < 15000 && live, detail: 'caught up: ' + first + ' in ' + catchUp + 'ms, live listener again: ' + live };
+  },
+
+  async 'listener dies silently while awake: the minute re-read notices and re-opens it'(sim) {
+    const { A, B } = await pair(sim);
+    await B.silenceListener();
+    await A.edit('stock-tasks', mark(BASE, 0, ' (A1)'));
+    const t0 = Date.now(); let got = false;
+    while (Date.now() - t0 < 80000) { if (has(await B.text('stock-tasks'), '(A1)')) { got = true; break; } await sleep(500); }
+    await sleep(1500);
+    await A.edit('stock-tasks', mark(mark(BASE, 0, ' (A1)'), 1, ' (A2)'));
+    const t1 = Date.now(); let live = false;
+    while (Date.now() - t1 < 8000) { if (has(await B.text('stock-tasks'), '(A2)')) { live = true; break; } await sleep(200); }
+    return { ok: got && live, detail: 'first edit via re-read: ' + got + ' after ' + (Date.now() - t0) + 'ms; listener live again: ' + live };
   },
 
   async 'wedged channel on wake (pull never answers), then recovers: device catches up'(sim) {

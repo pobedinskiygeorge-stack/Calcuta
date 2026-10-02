@@ -34,7 +34,7 @@ const FAKE_SDK = String.raw`(function(){
     setPersistence:function(){ return Promise.resolve(); },
     onAuthStateChanged:function(cb){ authCbs.push(cb); setTimeout(function(){ cb(window.__fsSignedOut?null:user); },0); return function(){}; },
     getRedirectResult:function(){ return Promise.resolve(null); },
-    signInWithPopup:function(){ return Promise.resolve(); },
+    signInWithPopup:function(){ window.__fsSignedOut=false; setTimeout(function(){ authCbs.forEach(function(cb){ cb(user); }); },0); return Promise.resolve(); },
     signInWithRedirect:function(){ return Promise.resolve(); },
     signOut:function(){ return Promise.resolve(); }
   };
@@ -85,7 +85,8 @@ const FAKE_SDK = String.raw`(function(){
     }
   };
   window.__fs={ calls:calls, listeners:function(){ return listeners.length; } };
-  window.__fsDeliver=function(rec){ listeners.slice().forEach(function(l){ if(!l.dead) l.next(snap(rec,false)); }); };
+  window.__fsDeliver=function(rec){ listeners.slice().forEach(function(l){ if(!l.dead && !l.silent) l.next(snap(rec,false)); }); };
+  window.__fsSilence=function(){ listeners.forEach(function(l){ l.silent=true; }); };   // sockets that died without an error
   window.__fsKill=function(code){ listeners.slice().forEach(function(l){ l.dead=true; if(l.err) l.err(Object.assign(new Error(code),{code:code})); }); listeners=[]; };
   window.firebase={
     initializeApp:function(){},
@@ -133,7 +134,8 @@ class Device {
     this.online = true; this.latency = opts.latency || 0; this.listenerLatency = opts.listenerLatency || 0;
     this.skew = opts.skew || 0; this.hang = {}; this.cache = null; this.subscribed = false;
     this.errors = []; this.file = opts.file || null;
-    this.sdkDown = !!opts.sdkDown;                       // the Firebase bundles cannot be fetched (network not up yet)    // opts.file: run another build of the app on this device
+    this.sdkDown = !!opts.sdkDown;
+    this.signedOut = !!opts.signedOut;                   // a fresh device: nobody has signed in on it yet                       // the Firebase bundles cannot be fetched (network not up yet)    // opts.file: run another build of the app on this device
   }
   async open() {
     const ctx = this.ctx = await chromium.launchPersistentContext(this.dir, {
@@ -141,6 +143,7 @@ class Device {
     });
     await ctx.addInitScript(skew => { const real = Date.now.bind(Date); window.__skew = skew; Date.now = () => real() + window.__skew; }, this.skew);
     await ctx.addInitScript(() => { window.__calcutaMergeLog = e => console.log('MERGELOG ' + JSON.stringify(e)); });
+    if (this.signedOut) await ctx.addInitScript(() => { window.__fsSignedOut = true; });
     if (process.env.SYNC_TRACE) await ctx.addInitScript(() => { window.__calcutaSyncLog = (ev, d) => console.log('SYNCLOG ' + Date.now() + ' ' + ev + ' ' + JSON.stringify(d)); });
     await ctx.route('**/firebasejs/**', r => this.sdkDown ? r.abort() : r.fulfill({ status: 200, contentType: 'application/javascript',
       headers: { 'access-control-allow-origin': '*' },
@@ -208,7 +211,12 @@ class Device {
   async show() { await this.page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); }); }
   async sleep() { await this.hide(); this.online = false; }           // laptop lid closed / phone app in background
   async wake() { this.online = true; await this.show(); await this.page.evaluate(() => window.dispatchEvent(new Event('online'))).catch(() => {}); this.deliverSoon(); }
+  async signIn() { this.signedOut = false; await this.page.evaluate(() => document.getElementById('google-signin').click()); }
   async killListener(code = 'permission-denied') { await this.page.evaluate(c => window.__fsKill(c), code); }
+  async silenceListener() { await this.page.evaluate(() => window.__fsSilence()); }
+  // the machine sleeps with the page "visible" (lid closed, no visibilitychange): its clock jumps, its timers pause
+  async lidSleep(ms) { this.online = false; await this.page.evaluate(ms => { window.__skew += ms; }, ms); }
+  async lidWake() { this.online = true; this.deliverSoon(); }
   async powerOff() { this.server.devices.delete(this); this.online = false; await this.ctx.close(); this.page = null; }   // no unload events
   async quit() {                                                    // user closes the browser normally
     await this.page.evaluate(() => { window.dispatchEvent(new Event('pagehide')); });
