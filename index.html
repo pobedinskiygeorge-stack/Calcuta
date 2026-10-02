@@ -4731,8 +4731,17 @@ function onAuthChanged(user){
   }
 }
 
+/* Not every failure is "no network, will retry": a store over Firestore's
+   1 MB document limit, or rules that refuse this account, will never
+   succeed by waiting — say so instead of promising a later save. */
+let syncProblem=null;
 function syncError(err){
-  if(err){ console.error('cloud sync error', err); setSyncStatus('offline'); }
+  if(!err){ syncProblem=null; return; }
+  console.error('cloud sync error', err);
+  const code=(err && err.code)||'', msg=String((err && err.message)||'');
+  if(code==='too-big' || (code==='invalid-argument' && /size|bytes/i.test(msg))) syncProblem='too-big';
+  else if(code==='permission-denied') syncProblem='denied';
+  setSyncStatus('offline');
 }
 /* ---- sync status pip in the top bar: 'saving' | 'saved' | 'offline' ---- */
 let syncSavedTimer=null;
@@ -4743,7 +4752,12 @@ function setSyncStatus(state){
   if(!navigator.onLine && state!=='saving'){ state='offline'; }
   clearTimeout(syncSavedTimer);
   if(state==='saving'){ el.className='sync-saving'; el.title='Сохранение…'; }
-  else if(state==='offline'){ el.className='sync-offline'; el.title='Нет сети — сохранится позже'; }
+  else if(state==='offline'){
+    el.className='sync-offline';
+    el.title = syncProblem==='too-big' ? 'Не помещается в облако: все документы вместе больше 1 МБ (лимит Firestore) — сохранено только на этом устройстве'
+             : syncProblem==='denied' ? 'Облако отказало в доступе (правила Firestore / вход) — сохранено только на этом устройстве'
+             : 'Нет сети — сохранится позже';
+  }
   else { el.className='sync-saved'; el.title='Сохранено'; }   // 'saved'
 }
 /* ================================================================
@@ -5219,6 +5233,10 @@ function cloudDoc(s){
   return { data: JSON.stringify(data), updated: Date.now(), proto: SYNC_PROTO };
 }
 function cloneStore(s){ return JSON.parse(JSON.stringify(s)); }
+/* Firestore caps a document at 1 MiB (UTF-8 bytes, all fields). Keep a
+   margin for the other fields and the close-flush entries. */
+const CLOUD_MAX_BYTES=1000000;
+function utf8Size(str){ try{ return new TextEncoder().encode(str).length; }catch(e){ return str.length*2; } }
 
 /* Shape any store-like object coming from outside this tab (cloud copy,
    close-flush entry, another tab's save) the way load() shapes the local one. */
@@ -5594,7 +5612,9 @@ function pushCloudNow(){
     // wakes every listener
     if(remote && !remote.__pending && remote.__proto>=SYNC_PROTO && syncPayload(next)===syncPayload(remote) &&
        (next.forceEpoch||0)===(remote.forceEpoch||0)) return;
-    tx.set(cloudRef, cloudDoc(next));
+    const out=cloudDoc(next);
+    if(utf8Size(out.data)>CLOUD_MAX_BYTES) throw Object.assign(new Error('store exceeds the cloud document size limit'), {code:'too-big'});
+    tx.set(cloudRef, out);
   })).then(()=>{
     if(seq!==pushSeq) return;            // abandoned by the watchdog meanwhile
     clearTimeout(pushWatchdog);
@@ -5682,7 +5702,9 @@ function hardSave(){
     const next=remote ? mergeStores(sent, remote, bases) : mergeStores(sent, {});
     next.forceEpoch=Math.max(store.forceEpoch||0, (remote&&remote.forceEpoch)||0, Date.now())+1;
     result={next, sent};
-    tx.set(cloudRef, cloudDoc(next));
+    const out=cloudDoc(next);
+    if(utf8Size(out.data)>CLOUD_MAX_BYTES) throw Object.assign(new Error('store exceeds the cloud document size limit'), {code:'too-big'});
+    tx.set(cloudRef, out);
   })).then(()=>{
       if(seq!==hardSeq) return;
       clearTimeout(watchdog);

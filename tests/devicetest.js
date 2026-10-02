@@ -543,6 +543,21 @@ const scenarios = {
              detail: 'uploads after the close-flush: ' + JSON.stringify(after) };
   },
 
+  async 'store over the 1 MB cloud limit: nothing half-written, the device says why, and recovers once trimmed'(sim) {
+    const { A, B } = await pair(sim);
+    // 1.2 MB of UTF-8 into a doc that is not open (the editor is not built to render that much)
+    await A.eval(() => { const K = window.__calcuta; const d = K.getStore().docs.find(x => x.id === 'stock-personal');
+      d.text = Array.from({ length: 6000 }, () => 'ж'.repeat(100)).join('\n'); d.updated = K.stamp(); K.__syncTest.flushSync(); });
+    await sleep(2500);
+    const title = await A.eval(() => document.getElementById('sync-status').title);
+    const serverP = sim.server.text('stock-personal');
+    await A.eval(() => { const K = window.__calcuta; const d = K.getStore().docs.find(x => x.id === 'stock-personal');
+      d.text = 'обрезано'; d.updated = K.stamp(); K.__syncTest.flushSync(); });
+    const ok = await sim.converge([A, B], 30000);
+    return { ok: serverP === '' && /1 МБ/.test(title) && ok && sim.server.text('stock-personal') === 'обрезано',
+             detail: 'title: ' + JSON.stringify(title) + ' server personal len while too big: ' + (serverP || '').length + ' converged after trim: ' + ok };
+  },
+
   async 'IME composition: a remote edit waits for the composition, then lands'(sim) {
     const { A, B } = await pair(sim);
     await B.eval(() => { const el = document.getElementById('input'); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
