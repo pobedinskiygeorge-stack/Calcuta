@@ -104,6 +104,23 @@ const scenarios = {
              detail: 'server: ' + JSON.stringify(s) };
   },
 
+  async 'switched on before the network was up (Firebase bundles failed to load): sync starts once it is'(sim) {
+    const { A, B } = await pair(sim);
+    await B.powerOff();
+    await A.edit('stock-tasks', mark(BASE, 0, ' (A while B off)'));
+    await sleep(1500);
+    B.sdkDown = true;                                   // browser restored the tab before Wi-Fi came up
+    await B.boot({ offline: true });
+    await sleep(2500);
+    await B.edit('stock-tasks', mark(await B.text('stock-tasks'), 2, ' (B before network)'));
+    await sleep(800);
+    B.sdkDown = false;
+    await B.goOnline();
+    const ok = await sim.converge([A, B], 30000);
+    const s = sim.server.text('stock-tasks');
+    return { ok: ok && has(s, '(A while B off)', '(B before network)'), detail: 'server: ' + JSON.stringify(s) };
+  },
+
   async 'clock 1 day BEHIND: its edit is not lost to an older remote one'(sim) {
     const { A, B } = await pair(sim, { skew: -86400000 });
     await B.goOffline();
@@ -381,6 +398,25 @@ const scenarios = {
     return { ok: ok && sim.server.text(w) === 'w text + B edit (slow clock)', detail: 'server W: ' + JSON.stringify(sim.server.text(w)) };
   },
 
+  async 'tags added on two devices while one is offline, then one deleted: both adds and the delete reach everyone'(sim) {
+    const { A, B } = await pair(sim);
+    const addTag = (dev, name) => dev.eval(n => { document.getElementById('tag-name').value = n; window.__calcuta.addTag(); }, name);
+    const delTag = (dev, name) => dev.eval(n => { const s = window.__calcuta.getStore(); const i = s.tags.findIndex(t => t.label === n);
+      document.querySelector('#tag-list .del[data-i="' + i + '"]').click(); }, name);
+    await B.goOffline();
+    await addTag(B, 'бета');
+    await addTag(A, 'альфа');
+    await sleep(1200);
+    await B.goOnline();
+    const ok1 = await sim.converge([A, B], 20000);
+    const labels1 = (sim.server.store().tags || []).map(t => t.label).sort().join(',');
+    await delTag(A, 'бета');
+    const ok2 = await sim.converge([A, B], 20000);
+    const labelsB = (await B.store()).tags.map(t => t.label).join(',');
+    return { ok: ok1 && ok2 && labels1 === 'альфа,бета' && labelsB === 'альфа',
+             detail: 'after adds: ' + labels1 + ' | B after delete: ' + labelsB };
+  },
+
   async 'rename on one device + text edit on another: both kept'(sim) {
     const { A, B } = await pair(sim);
     const x = await A.createDoc('X', 'x1\nx2');
@@ -438,6 +474,23 @@ const scenarios = {
     const raw = sim.server.doc;
     return { ok: ok && has(s, '(A last)', '(B last)') && !(raw.pending && Object.keys(raw.pending).length),
              detail: 'server: ' + JSON.stringify(s) + ' pending left: ' + JSON.stringify(raw.pending || null) };
+  },
+
+  async 'a close-flush seen by three online devices costs one fold upload, not a write race'(sim) {
+    const { A, B } = await pair(sim);
+    const C = await sim.device('C'); const D = await sim.device('D');
+    await sleep(2000);
+    await sim.converge([A, B, C, D], 20000);
+    D.hang.commit = true;
+    await D.edit('stock-tasks', mark(BASE, 1, ' (D last words)'));
+    await sleep(300);
+    await D.quit();
+    const w0 = sim.server.writes.length;
+    await sleep(6000);
+    const ok = await sim.converge([A, B, C], 20000);
+    const after = sim.server.writes.slice(w0).filter(w => w.via === 'tx');
+    return { ok: ok && has(sim.server.text('stock-tasks'), '(D last words)') && after.length <= 1 && !sim.server.doc.pending,
+             detail: 'uploads after the close-flush: ' + JSON.stringify(after) };
   },
 
   async 'IME composition: a remote edit waits for the composition, then lands'(sim) {

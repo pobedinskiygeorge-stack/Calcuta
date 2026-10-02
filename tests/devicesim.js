@@ -132,7 +132,8 @@ class Device {
     this.dir = fs.mkdtempSync(path.join(sim.tmp, name + '-'));
     this.online = true; this.latency = opts.latency || 0; this.listenerLatency = opts.listenerLatency || 0;
     this.skew = opts.skew || 0; this.hang = {}; this.cache = null; this.subscribed = false;
-    this.errors = []; this.file = opts.file || null;    // opts.file: run another build of the app on this device
+    this.errors = []; this.file = opts.file || null;
+    this.sdkDown = !!opts.sdkDown;                       // the Firebase bundles cannot be fetched (network not up yet)    // opts.file: run another build of the app on this device
   }
   async open() {
     const ctx = this.ctx = await chromium.launchPersistentContext(this.dir, {
@@ -141,7 +142,7 @@ class Device {
     await ctx.addInitScript(skew => { const real = Date.now.bind(Date); window.__skew = skew; Date.now = () => real() + window.__skew; }, this.skew);
     await ctx.addInitScript(() => { window.__calcutaMergeLog = e => console.log('MERGELOG ' + JSON.stringify(e)); });
     if (process.env.SYNC_TRACE) await ctx.addInitScript(() => { window.__calcutaSyncLog = (ev, d) => console.log('SYNCLOG ' + Date.now() + ' ' + ev + ' ' + JSON.stringify(d)); });
-    await ctx.route('**/firebasejs/**', r => r.fulfill({ status: 200, contentType: 'application/javascript',
+    await ctx.route('**/firebasejs/**', r => this.sdkDown ? r.abort() : r.fulfill({ status: 200, contentType: 'application/javascript',
       headers: { 'access-control-allow-origin': '*' },
       body: r.request().url().includes('firebase-app-compat') ? FAKE_SDK : '/* stub */' }));
     await ctx.route('**://firestore.googleapis.com/**', r => this.rest(r));

@@ -4590,18 +4590,40 @@ function signOutAndWipe(){
    padding). Order matters — auth/firestore compat both require app compat. */
 const FB_VERSION='10.12.2';
 const FB_BASE='https://www.gstatic.com/firebasejs/'+FB_VERSION+'/';
-let fbLoadPromise=null;
+/* Each bundle is requested once; a failed one is forgotten (and its <script>
+   removed) so the next attempt fetches only what is still missing. */
+const fbFiles={};
 function loadFirebase(){
-  if(fbLoadPromise) return fbLoadPromise;
-  const one=(file)=>new Promise((res,rej)=>{
+  const one=(file)=>fbFiles[file] || (fbFiles[file]=new Promise((res,rej)=>{
     const s=document.createElement('script');
     s.src=FB_BASE+file; s.async=false; s.crossOrigin='anonymous';
-    s.onload=res; s.onerror=()=>rej(new Error(file));
+    s.onload=res; s.onerror=()=>{ delete fbFiles[file]; s.remove(); rej(new Error(file)); };
     document.head.appendChild(s);
-  });
-  fbLoadPromise=one('firebase-app-compat.js')
+  }));
+  return one('firebase-app-compat.js')
     .then(()=>Promise.all([one('firebase-auth-compat.js'), one('firebase-firestore-compat.js')]));
-  return fbLoadPromise;
+}
+/* Start sign-in + sync. If the bundles cannot be fetched (the page was
+   restored before the network came up — the usual first minute of a device
+   switched on after a long time), keep retrying: on 'online', on wake, and
+   with backoff. It used to try exactly once, so such a device ran the whole
+   session without syncing at all. */
+let fbStarted=false, fbTried=false, fbRetryTimer=null, fbBackoff=0;
+function startFirebase(){
+  if(fbStarted) return;
+  fbTried=true;
+  clearTimeout(fbRetryTimer); fbRetryTimer=null;
+  loadFirebase().then(()=>{
+    if(fbStarted) return;
+    fbStarted=true; initAuth();
+  }, ()=>{
+    if(fbStarted) return;
+    const statusEl=$('authgate-status'), btn=$('google-signin');
+    if(statusEl) statusEl.textContent='Не удалось загрузить Firebase (нет сети?) — повторим автоматически';
+    if(btn) btn.disabled=true;
+    fbBackoff=Math.min(fbBackoff ? fbBackoff*2 : 5000, 60000);
+    fbRetryTimer=setTimeout(startFirebase, fbBackoff);
+  });
 }
 
 function initAuth(){
@@ -4616,6 +4638,7 @@ function initAuth(){
     btn.disabled=true;
     return;
   }
+  btn.disabled=false; statusEl.textContent='';   // a load that failed before may have left these
   firebase.initializeApp(firebaseConfig);
   auth=firebase.auth();
   db=firebase.firestore();
@@ -5038,8 +5061,11 @@ function lwwDoc(a,b){
 // Keep L over R, with a stamp past R's: a document's stamp only ever climbs
 // along the server's history, which is what lets a late (stale) delivery be
 // recognised below.
-function bumpPast(L,R){ return (L.updated||0)>(R.updated||0) ? L : Object.assign({}, L, {updated:stamp()}); }
-function mergeDoc(L, R, b){
+// `next` makes the stamp for a merged result; normally the logical clock.
+function bumpPast(L,R,next){ return (L.updated||0)>(R.updated||0) ? L : Object.assign({}, L, {updated:next(L,R)}); }
+const clockStamp=()=>stamp();
+function mergeDoc(L, R, b, next){
+  next=next||clockStamp;
   if(!b) return lwwDoc(L,R);
   const bt=b.text||'', bn=b.name||'';
   const lt=(L.text||'')!==bt, ln=(L.name||'')!==bn;
@@ -5047,20 +5073,20 @@ function mergeDoc(L, R, b){
   // out-of-order read): it is not news, whatever its content
   const stale=(R.updated||0)<(b.updated||0);
   const rt=!stale && (R.text||'')!==bt, rn=!stale && (R.name||'')!==bn;
-  if(!rt && !rn) return (lt||ln) ? bumpPast(L,R) : (stale ? L : lwwDoc(L,R));
+  if(!rt && !rn) return (lt||ln) ? bumpPast(L,R,next) : (stale ? L : lwwDoc(L,R));
   if(!lt && !ln) return R;
   const lNewer=(L.updated||0)>=(R.updated||0);
   const text=!rt ? (L.text||'') : !lt ? (R.text||'') : merge3(bt, L.text||'', R.text||'', lNewer);
   const name=!rn ? L.name : !ln ? R.name : (lNewer ? L.name : R.name);
   if(text===(R.text||'') && (name||'')===(R.name||'')) return R;
-  if(text===(L.text||'') && (name||'')===(L.name||'')) return bumpPast(L,R);
-  return Object.assign({}, lNewer?L:R, {text, name, updated:stamp()});
+  if(text===(L.text||'') && (name||'')===(L.name||'')) return bumpPast(L,R,next);
+  return Object.assign({}, lNewer?L:R, {text, name, updated:next(L,R)});
 }
 
 /* Merge two stores. With `bases` (id -> base) documents changed on both
    sides are merged three-way; without, per-doc last-writer-wins
    (deterministic and commutative). */
-function mergeStores(local, remote, bases){
+function mergeStores(local, remote, bases, next){
   local=local||{}; remote=remote||{};
   const tomb={};
   const addTomb=m=>{ if(m&&typeof m==='object') for(const id in m) tomb[id]=Math.max(tomb[id]||0, m[id]||0); };
@@ -5074,7 +5100,7 @@ function mergeStores(local, remote, bases){
   const byId=side(local.docs);
   for(const [id,r] of side(remote.docs)){
     const l=byId.get(id);
-    byId.set(id, !l ? r : bases ? mergeDoc(l, r, bases[id]) : lwwDoc(l, r));
+    byId.set(id, !l ? r : bases ? mergeDoc(l, r, bases[id], next) : lwwDoc(l, r));
   }
 
   const docs=[];
@@ -5086,7 +5112,7 @@ function mergeStores(local, remote, bases){
       const b=bases && bases[id];
       const edited=b && (d.updated||0)>(b.updated||0) && ((d.text||'')!==b.text || (d.name||'')!==b.name);
       if(!edited) continue;
-      d=Object.assign({}, d, {updated:stamp()});
+      d=Object.assign({}, d, {updated: next ? Math.max(d.updated||0, tomb[id]||0)+1 : stamp()});
       byId.set(id, d);
     }
     docs.push(d);
@@ -5214,9 +5240,14 @@ function foldPending(s, pend){
   }
   entries.sort((a,b)=>(a.at||0)-(b.at||0));
   prepRemote(s);
+  // Stamps here are derived from the inputs (one past the newer side), not
+  // from this device's clock: every device that reads the same entries folds
+  // them to the very same result, so they do not trade extra uploads over
+  // whose stamp is higher.
+  const det=(L,R)=>Math.max(L.updated||0, R.updated||0)+1;
   for(const e of entries){
     prepRemote(normalizeRemoteShape(e));
-    s=mergeStores(e, s, (e.bases && typeof e.bases==='object') ? e.bases : {});
+    s=mergeStores(e, s, (e.bases && typeof e.bases==='object') ? e.bases : {}, det);
   }
   s.__pending=true;
   return s;
@@ -5265,8 +5296,11 @@ function applyStore(next){
   const prevActive=store.activeId, oldVal=input.value;
   const focused=(document.activeElement===input);
   const s0=input.selectionStart, s1=input.selectionEnd;
+  const tagsBefore=JSON.stringify(store.tags);
   store=next;
   applyResultsWidth(store.resultsWidth);
+  // the recolour grid targets a tag by its index, which a merge can shift
+  if(JSON.stringify(store.tags)!==tagsBefore) closeTagPicker();
   renderTags();
   if(store.activeId!==prevActive){
     loadActiveIntoEditor();               // the open doc was deleted elsewhere: show the fallback
@@ -5500,6 +5534,11 @@ function pushCloudNow(){
     const sent=cloneStore(store), bases=Object.assign({}, docBases);
     const next=remote ? mergeStores(sent, remote, bases) : mergeStores(sent, {});
     result={next, sent};
+    // the server already holds exactly this (another device uploaded the
+    // same merge first): write nothing — a no-op set() is still a write that
+    // wakes every listener
+    if(remote && !remote.__pending && remote.__proto>=SYNC_PROTO && syncPayload(next)===syncPayload(remote) &&
+       (next.forceEpoch||0)===(remote.forceEpoch||0)) return;
     tx.set(cloudRef, cloudDoc(next));
   })).then(()=>{
     if(seq!==pushSeq) return;            // abandoned by the watchdog meanwhile
@@ -5670,6 +5709,7 @@ function protoBlock(){
 let hiddenAt=0;
 function onSyncWake(){
   checkAppUpdate();
+  if(fbTried && !fbStarted) startFirebase();     // only retries: the first start stays lazy (boot)
   if(!currentUser) return;
   refreshIdToken();
   if(hiddenAt && Date.now()-hiddenAt>=SYNC_T.resubAfter) resubscribe();
@@ -5837,7 +5877,7 @@ async function openSharedView(){
   const m=location.hash.match(/^#doc=(.+)$/);
   let data=null;
   if(m){ try{ data=JSON.parse(await b64ToText(decodeURIComponent(m[1]))); }catch(e){ data=null; } }
-  if(!data || typeof data.t!=='string'){ initAuth(); return; }   // bad link -> normal app
+  if(!data || typeof data.t!=='string'){ startFirebase(); return; }   // bad link -> normal app (it used to skip loading Firebase: no sync all session)
   if((data.m|0)<MARKUP_V) data.t=upgradeMarkup(data.t, data.m|0);   // link made by an older build
   sharedMode=true;
   hideAuthGate();
@@ -5886,9 +5926,8 @@ function boot(){
     // live immediately and auth settles in the background.
     if(!wasSignedIn() && !hasLocalContent()) showAuthGate();
     // Load the SDK once the browser is idle, after the first paint.
-    const startAuth=()=>loadFirebase().then(initAuth, ()=>initAuth());
-    if(window.requestIdleCallback) requestIdleCallback(startAuth, {timeout:2000});
-    else setTimeout(startAuth, 1);
+    if(window.requestIdleCallback) requestIdleCallback(startFirebase, {timeout:2000});
+    else setTimeout(startFirebase, 1);
   }
 
   input.addEventListener('beforeinput', onBeforeInput);
@@ -6230,6 +6269,7 @@ function boot(){
   // with the server first (merge), then re-pushes anything still unsynced
   window.addEventListener('offline', ()=>setSyncStatus('offline'));
   window.addEventListener('online', ()=>{
+    if(fbTried && !fbStarted) startFirebase();
     setSyncStatus('saved'); refreshIdToken();
     if(hardSavePending){ hardSavePending=false; hardSave(); }
     resubscribe();
