@@ -3940,6 +3940,7 @@ function setRowFx(){
    Called from render() (force) and on every caret move / focus change, where
    it only rebuilds when the caret's row or the focus actually changed. */
 let railCaretKey='';
+const PHONE_MQ=window.matchMedia('(max-width:720px)');   // same breakpoint as the phone CSS
 function renderRails(force){
   if(!model) return;
   const L=model.data.lines, n=L.length;
@@ -3957,7 +3958,10 @@ function renderRails(force){
     if(last>k){
       const top=(lineRowTop[k]+lineRowCount[k])*LH + 14 + 2;              // under the heading row (+ padY)
       const bottom=(lineRowTop[last]+lineRowCount[last])*LH + 14 - 3;
-      const left=Math.round(16 + charW/2);                               // padX + half a glyph: under the "#"
+      // under the "#" (padX + half a glyph) - except on a phone, where most lines
+      // wrap and their wrapped rows restart at column 0, right under the "#":
+      // there the rail moves into the left padding, beside the text, never on it
+      const left=PHONE_MQ.matches ? 6 : Math.round(16 + charW/2);
       rails+='<div class="sec-rail" data-i="'+k+'" style="top:'+top+'px;height:'+(bottom-top)+'px;left:'+left+'px"></div>';
     }
     k=j-1;
@@ -5311,6 +5315,7 @@ function boot(){
   document.addEventListener('selectionchange', renderCaret);       // block caret + empty-line ghost
   document.addEventListener('selectionchange', updateBracketMatch); // matching-bracket highlight
   document.addEventListener('selectionchange', ()=>renderRails());   // section rail follows the caret
+  if(PHONE_MQ.addEventListener) PHONE_MQ.addEventListener('change', ()=>renderRails(true));
   document.addEventListener('selectionchange', onPairCaretMove);      // auto-closed "()" left -> round marker
   input.addEventListener('focus', ()=>renderRails());
   input.addEventListener('blur', ()=>setTimeout(()=>renderRails(),0));
