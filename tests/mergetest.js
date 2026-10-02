@@ -166,6 +166,18 @@ const CASES = [
   check(!res.intactFail.length, `lines neither side touched survive intact, once (${res.intact} lines)`, JSON.stringify(res.intactFail[0]));
   check(!res.insFail.length, `insert-only concurrent edits: no line duplicated or lost, nothing typed lost (${res.ins} cases)`, JSON.stringify(res.insFail[0]) + ' (' + res.insFail.length + '+ failures)');
 
+  // ---- a big document, edits near both ends on one side, middle on the other ----
+  const big = await page.evaluate(() => {
+    const T = window.__calcuta.__syncTest, N = 3000;
+    const base = Array.from({ length: N }, (_, i) => 'строка номер ' + i + ' = ' + (i * 7 % 13)).join('\n');
+    const L = base.split('\n'); L[0] += ' (A0)'; L.splice(N - 1, 0, 'новая строка A'); L.splice(2000, 1);
+    const R = base.split('\n'); R[1500] += ' (B mid)'; R.splice(10, 1); R.push('конец B');
+    const want = base.split('\n'); want[0] += ' (A0)'; want[1500] += ' (B mid)'; want.splice(N - 1, 0, 'новая строка A'); want.splice(2000, 1); want.splice(10, 1); want.push('конец B');
+    const t0 = performance.now(); const m = T.merge3(base, L.join('\n'), R.join('\n'), true); const ms = performance.now() - t0;
+    return { exact: m === want.join('\n'), ms: Math.round(ms) };
+  });
+  check(big.exact && big.ms < 1500, `3000-line document, edits at both ends vs middle: exact merge (${big.ms} ms)`, JSON.stringify(big));
+
   // ---- mapOffset: caret while a remote edit lands ----
   const mo = await page.evaluate(() => {
     const T = window.__calcuta.__syncTest;
