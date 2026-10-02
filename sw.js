@@ -86,7 +86,10 @@ self.addEventListener('fetch', e=>{
       const cachedP = caches.match(req)
         .then(r=>r || caches.match('./index.html'))
         .then(r=>r || caches.match('./'));
-      const netP = fetch(req).then(res=>put(req,res));
+      // no-cache: revalidate with the server instead of taking the browser's
+      // HTTP cache (GitHub Pages sends max-age=600), so a launch right after a
+      // deploy already gets the new build — not one up to 10 minutes old.
+      const netP = fetch(req, {cache:'no-cache'}).then(res=>put(req,res));
       const TIMEOUT = Symbol('timeout'), FAILED = Symbol('failed');
       const first = await Promise.race([
         netP.catch(()=>FAILED),

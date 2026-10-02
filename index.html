@@ -2350,16 +2350,43 @@ function observeStore(s){
   const scan=m=>{ if(m&&typeof m==='object') for(const k in m) observeTime(m[k]); };
   scan(s.deletedDocs); scan(s.deletedTags);
 }
+/* ---- sync bases ----
+   For every document, the last version of it this device saw ON THE SERVER
+   (its text, name and stamp). It is the common ancestor for a three-way
+   merge: comparing the local copy and the server copy against it tells
+   which side actually changed what — so an edit made on a device that was
+   asleep, offline or switched off is merged with newer edits from other
+   devices instead of one of them being thrown away by timestamp. Saved in
+   the same localStorage blob as the store (key "_bases"), so the two can
+   never be read out of step with each other. */
+let docBases={}, docBasesUid=null;   // bases belong to one account's cloud copy
+/* test hook (tests/devicesim.js): a timeline of sync events, never set in the app */
+function syncTrace(ev, data){ if(window.__calcutaSyncLog) try{ window.__calcutaSyncLog(ev, data); }catch(e){} }
+/* The raw blob this tab last wrote or read. If localStorage holds anything
+   else, another tab of the app has saved since: merge that in before
+   writing, or the stale tab's write would erase the other tab's edits. */
+let lastLocalRaw=null;
 function saveLocal(){
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){}
+  if(sharedMode) return;   // see persist()
+  try{
+    const raw=localStorage.getItem(STORE_KEY);
+    if(raw!==null && lastLocalRaw!==null && raw!==lastLocalRaw){ lastLocalRaw=raw; integrateLocal(raw); }
+    const out=JSON.stringify(Object.assign({}, store, {_bases:docBases, _basesUid:docBasesUid}));
+    localStorage.setItem(STORE_KEY, out); lastLocalRaw=out;
+  }catch(e){}
 }
 function persist(){
+  // A shared-link preview shows SOMEONE ELSE'S text in the editor; the store
+  // still holds the user's own docs. Saving here wrote that text into the
+  // user's open document (on hide, close, blur) — and the next normal launch
+  // uploaded it to every device as the newest version.
+  if(sharedMode) return;
   // Only move a doc's `updated` forward when its TEXT actually changed — so
   // navigation (switch/create/delete all call persist()) can't spuriously
   // bump an untouched doc and let its stale copy out-compete a newer edit made
   // to the same doc on another device. Real edits already bumped `updated` in
   // onChange(); by the time this debounced save runs, text===value → no re-bump.
-  const d=doc(); if(d && d.text!==input.value){ d.text=input.value; d.updated=stamp(); }
+  const d=doc(); if(d && d.text!==input.value){ window.__calcutaSyncLog && syncTrace('persist', {id:d.id, from:d.text, to:input.value}); d.text=input.value; d.updated=stamp(); }
   store.updated=Date.now();
   saveLocal();
   cloudSave();
@@ -2463,8 +2490,11 @@ function canonicalDocId(d){
 }
 function load(){
   let s=null;
-  try{ s=JSON.parse(localStorage.getItem(STORE_KEY)||'null'); }catch(e){}
+  try{ lastLocalRaw=localStorage.getItem(STORE_KEY); s=JSON.parse(lastLocalRaw||'null'); }catch(e){}
   if(s && Array.isArray(s.docs)){
+    docBases=(s._bases && typeof s._bases==='object') ? s._bases : {};
+    docBasesUid=(typeof s._basesUid==='string') ? s._basesUid : null;
+    delete s._bases; delete s._basesUid;
     store=s;
   }else{
     // migrate from v1 single-document format, or start fresh
@@ -2539,6 +2569,7 @@ function load(){
   if(!store.docs.some(d=>d.id===store.activeId)) store.activeId=store.docs[0].id;
 
   observeStore(store);   // seed the logical clock past everything already stored
+  window.__calcutaSyncLog && syncTrace('load', {store:store.docs.map(d=>[d.id,d.text,d.updated]), bases:docBases});
 
   applyResultsWidth(store.resultsWidth);
   loadActiveIntoEditor();
@@ -2550,6 +2581,7 @@ function load(){
 /* Load the active document's text into the editor. */
 function loadActiveIntoEditor(){
   const d=doc();
+  useHistoryFor(d.id);   // Ctrl+Z only ever walks this document's own history
   input.value=d.text||'';
   autoIndent();
   applyMask();
@@ -2611,7 +2643,7 @@ function beginRename(id, nameEl){
   nameEl.replaceWith(inp);
   inp.focus(); inp.select();
   let done=false;
-  const commit=()=>{ if(done) return; done=true; d.name=(inp.value.trim()||'Без названия'); d.updated=stamp(); renderDocs(); scheduleSave(); };
+  const commit=()=>{ if(done) return; done=true; const cur=store.docs.find(x=>x.id===id); if(cur){ cur.name=(inp.value.trim()||'Без названия'); cur.updated=stamp(); } renderDocs(); scheduleSave(); };
   const cancel=()=>{ if(done) return; done=true; renderDocs(); };
   inp.addEventListener('keydown', e=>{
     if(e.key==='Enter'){ e.preventDefault(); commit(); }
@@ -3107,6 +3139,7 @@ function onInput(e){
 let lastEditAt=0;   // when the user last actually typed (gates remote adoption)
 function onChange(){
   lastEditAt=Date.now();
+  window.__calcutaSyncLog && syncTrace('edit', {id:store.activeId, text:input.value});
   // Keep the active doc's text in sync with the editor SYNCHRONOUSLY on every
   // change (not only in the debounced persist()) so store is never stale
   // relative to what's on screen. Otherwise a cloud snapshot arriving in the
@@ -3491,6 +3524,36 @@ function onEditorKeydown(e){
 
 /* ---------- undo / redo (native history is lost to programmatic formatting) ---------- */
 let undoStack=[], redoStack=[], undoTimer=null, suppressHistory=false, lastInputType='';
+/* One history per document. A single global stack let Ctrl+Z, pressed right
+   after switching documents, restore the PREVIOUS document's text into the
+   one now open — and the save that followed pushed it to every device. */
+const histories=new Map();   // doc id -> {undo, redo}; the active one is aliased by undoStack/redoStack
+let histDocId=null;
+function useHistoryFor(id){
+  if(id===histDocId) return;
+  let h=histories.get(id);
+  if(!h){ h={undo:[], redo:[]}; histories.set(id,h); }
+  undoStack=h.undo; redoStack=h.redo; histDocId=id;
+  clearTimeout(undoTimer); undoTimer=null; lastInputType='';
+}
+/* A synced change replaced a doc's text from `oldText` to `newText`. Carry
+   it into every undo/redo snapshot of that doc (three-way merge), so undoing
+   your own typing later never rolls back an edit that came from another
+   device. Histories of documents that no longer exist are dropped. */
+function rebaseHistories(changes){
+  for(const [id,h] of histories){
+    if(!store.docs.some(d=>d.id===id)){ histories.delete(id); if(id===histDocId){ undoStack.length=0; redoStack.length=0; } continue; }
+    const ch=changes.get(id); if(!ch) continue;
+    for(const st of [h.undo, h.redo]){
+      if(st.length>100) st.splice(0, st.length-100);
+      for(const s of st){
+        if(s.text===ch.oldText){ s.caret=mapOffset(ch.oldText, ch.newText, s.caret); s.text=ch.newText; continue; }
+        const t=merge3(ch.oldText, s.text, ch.newText, false, true);
+        s.caret=Math.min(mapOffset(s.text, t, s.caret), t.length); s.text=t;
+      }
+    }
+  }
+}
 function histState(){ return {text:input.value, caret:input.selectionStart}; }
 function pushHistory(st){
   const top=undoStack[undoStack.length-1];
@@ -4481,6 +4544,7 @@ const firebaseConfig = {
 function firebaseIsConfigured(){ return !!(firebaseConfig.apiKey && !firebaseConfig.apiKey.includes('ЗАМЕНИТЕ')); }
 
 let auth=null, db=null, currentUser=null, cloudUnsub=null;
+const FS_CLEARED_KEY='calcuta.fsCleared';
 
 /* Set once a real session has existed on this device. It is the synchronous,
    offline-safe answer to "has this browser ever been signed in?", which is all
@@ -4555,11 +4619,17 @@ function initAuth(){
   firebase.initializeApp(firebaseConfig);
   auth=firebase.auth();
   db=firebase.firestore();
-  // Durable offline write queue (IndexedDB): a save made on a weak/again-off
-  // VPN, mobile data or right before the tab/computer closes is persisted
-  // locally and flushed to the server as soon as connectivity returns — it can
-  // no longer be lost in memory. synchronizeTabs allows several open tabs.
-  try{ if(db.enablePersistence) db.enablePersistence({synchronizeTabs:true}).catch(()=>{}); }catch(e){}
+  // NO Firestore offline persistence. Every upload is a transaction (which
+  // never queues offline) and every edit already lives in localStorage, so
+  // the IndexedDB cache only added risk: a device back after weeks first got
+  // its weeks-old CACHED copy as a snapshot, and old builds left writes
+  // queued in it that could replay over newer data. Builds before this one
+  // enabled it, so the leftover cache is wiped once, before first use.
+  try{
+    if(!localStorage.getItem(FS_CLEARED_KEY) && db.clearPersistence){
+      db.clearPersistence().then(()=>{ try{ localStorage.setItem(FS_CLEARED_KEY,"1"); }catch(e){} }, ()=>{});
+    }
+  }catch(e){}
   auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
   auth.onAuthStateChanged(onAuthChanged);
   // Completes a signInWithRedirect() round trip (from the popup fallback
@@ -4608,6 +4678,8 @@ function initAuth(){
 function onAuthChanged(user){
   currentUser=user;
   if(user){
+    // bases recorded against another account's cloud copy mean nothing here
+    if(docBasesUid!==user.uid){ if(docBasesUid) docBases={}; docBasesUid=user.uid; }
     hideAuthGate();
     // Remember on this device that a real session existed, so the next launch
     // can show the editor immediately instead of waiting for Firebase.
@@ -4625,7 +4697,8 @@ function onAuthChanged(user){
     // otherwise leave the notes editable offline and let the sync pip offer
     // the way back in. Every cloud write already early-returns on !currentUser.
     if(hasLocalContent()) showSignInAffordance(); else showAuthGate();
-    cloudReady=false; cloudRef=null; cachedIdToken=null;
+    cloudReady=false; cloudRef=null; cachedIdToken=null; listenSeq++;
+    clearTimeout(listenRetryTimer); clearTimeout(pullRetryTimer); clearTimeout(pushRetryTimer);
     if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
     setSyncStatus();   // hides the pip
   }
@@ -4639,6 +4712,7 @@ let syncSavedTimer=null;
 function setSyncStatus(state){
   const el=document.getElementById('sync-status'); if(!el) return;
   if(!currentUser){ el.className='sync-hidden'; return; }
+  if(protoBlocked){ el.className='sync-offline'; el.title='Вышла новая версия приложения — обновите страницу'; return; }
   if(!navigator.onLine && state!=='saving'){ state='offline'; }
   clearTimeout(syncSavedTimer);
   if(state==='saving'){ el.className='sync-saving'; el.title='Сохранение…'; }
@@ -4648,32 +4722,56 @@ function setSyncStatus(state){
 /* ================================================================
    [SYNC] Merge-based cloud sync.
 
-   The cloud doc holds the whole store as JSON. Rather than whole-store
-   last-write-wins (which loses edits made on another device, is defeated by
-   client-clock skew, and lets a freshly-seeded device's stock docs clobber
-   real data), we MERGE PER DOCUMENT by each doc's own `updated` timestamp,
-   with tombstones for deletions. Seeded stock docs carry updated:0 so a real
-   cloud copy of the same doc always wins. The merge is deterministic and
-   commutative, so every device converges to the same result. activeId and
-   resultsWidth stay device-local (which doc you're viewing / how wide your
-   results column is shouldn't jump around between devices).
+   The cloud doc (users/{uid}) holds the whole store as JSON in `data`.
+   Nothing ever overwrites it blindly: every upload is a Firestore
+   transaction that reads the current server copy, MERGES it with this
+   device's store, and writes the result — so a device that has not seen the
+   latest version (a laptop woken from a week of sleep, a phone that was
+   off, a tab left open offline) physically cannot erase newer data.
 
-   CRUCIALLY, the merge runs on the WRITE side too: every upload is a Firestore
-   transaction that reads the current server copy, merges, and writes the
-   result. A blind whole-store set() — what pushCloud() used to do — is
-   last-write-wins at store level: a device that had not yet SEEN the latest
-   cloud version (a laptop woken from overnight sleep, a cold cache, a write
-   queued offline days ago) overwrote every newer edit in one shot. That was
-   the "edited at work, came home, the stale Mac clobbered it" failure. With
-   read-merge-write, a push physically cannot erase data it hasn't observed,
-   no matter how stale the device is.
+   The merge is THREE-WAY, per document. For every doc each device keeps a
+   "base": the last version of it that it saw on the server (docBases).
+   Comparing both copies against the base tells who changed what:
+     - only the server copy changed  -> take it (this device was just stale);
+     - only the local copy changed   -> keep it (it is the news);
+     - both changed                  -> merge the TEXT line by line (diff3),
+       so an edit typed on a device that slept, was offline or was switched
+       off survives next to the edits made elsewhere in the meantime.
+   The older rule — newest timestamp wins the whole document — threw one of
+   the two edits away, and a device with a slow clock always lost. Without a
+   base (the first sync after this upgrade) it is still the fallback.
+   Deletions use tombstones; tags merge per tag; activeId, resultsWidth and
+   pins stay device-local.
+
+   Self-healing: nothing in the loop can wedge for good.
+     - a push or a server read that never answers is abandoned after a
+       timeout and retried (SYNC_T);
+     - a live listener that errors is re-opened with backoff, and re-opened
+       on wake after a long sleep;
+     - while visible and online the server is re-read whenever it has been
+       silent for SYNC_T.pullEvery, so a listener that died silently can only
+       delay an update, never lose it;
+     - a store that differs from what the server confirmed is re-pushed by
+       the heartbeat even if every timer was lost.
    ================================================================ */
+const SYNC_PROTO=2;   // cloud format version, written with every upload
+const SYNC_T={
+  pushTimeout:20000,   // a push that has not settled by then is abandoned and retried
+  pullTimeout:15000,   // the same for a server read
+  pullEvery:60000,     // visible + online: re-read the server after this long without news
+  resubAfter:60000,    // waking from a hide this long re-opens the live listener
+};
 let cloudRef=null, cloudReady=false, cloudSaveTimer=null;
-/* Wall-clock of the last time THIS device read authoritative (non-cache)
-   server state — via the snapshot listener, a wake-up pull, or a successful
-   transactional push (whose tx.get is a server read). Gates the one remaining
-   non-merging write path (keepaliveFlush). */
+/* Wall-clock of the last time THIS device heard from the server (listener
+   snapshot, server read or a committed push). Drives the heartbeat pull. */
 let serverSeenAt=0;
+/* The cloud was written by a NEWER build than this one (its `proto` is
+   higher): stop writing and get the update instead of guessing. */
+let protoBlocked=false;
+/* Key of this page's entry in the cloud doc's `pending` map (close-flush,
+   see keepaliveFlush). Per page load, so two tabs never overwrite each
+   other's entry; every regular upload clears the whole map. */
+const PENDING_KEY='p'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 
 /* Canonical doc order: stock docs pinned first, then others by id (uid()
    encodes creation time), so all devices order identically → convergence. */
@@ -4687,29 +4785,282 @@ function orderDocs(docs){
 }
 function docSig(d){ return JSON.stringify({n:d.name||'',t:d.text||''}); }
 
-/* Deterministic, commutative per-document merge of two stores. */
-function mergeStores(local, remote){
+/* ---- three-way text merge ---- */
+/* Longest common subsequence of two arrays (lines or characters):
+   match[i] = index in b paired with a[i], or -1. The common prefix and
+   suffix are paired directly, so the DP only spans the edited middle; a
+   middle too large for it (LCS_CAP cells) is left unpaired, i.e. treated as
+   one changed block — still correct, just coarser. */
+const LCS_CAP=4e6;
+function lcsMatch(a, b){
+  const n=a.length, m=b.length, match=new Int32Array(n).fill(-1);
+  let p=0; while(p<n && p<m && a[p]===b[p]){ match[p]=p; p++; }
+  let s=0; while(s<n-p && s<m-p && a[n-1-s]===b[m-1-s]){ match[n-1-s]=m-1-s; s++; }
+  const N=n-p-s, M=m-p-s;
+  if(N>0 && M>0 && N*M<=LCS_CAP){
+    const W=M+1, T=new Int32Array((N+1)*W);   // T[i*W+j] = LCS of a[p+i..], b[p+j..]
+    for(let i=N-1;i>=0;i--){
+      const ai=a[p+i];
+      for(let j=M-1;j>=0;j--){
+        T[i*W+j] = ai===b[p+j] ? T[(i+1)*W+j+1]+1 : Math.max(T[(i+1)*W+j], T[i*W+j+1]);
+      }
+    }
+    let i=0, j=0;
+    while(i<N && j<M){
+      if(a[p+i]===b[p+j]){ match[p+i]=p+j; i++; j++; }
+      else if(T[(i+1)*W+j]>=T[i*W+j+1]) i++;
+      else j++;
+    }
+  }
+  return match;
+}
+function sameArr(x,y){ if(x.length!==y.length) return false; for(let i=0;i<x.length;i++) if(x[i]!==y[i]) return false; return true; }
+/* diff3 over arrays: walk the base, copying runs that both sides kept;
+   between two such anchors take whichever side changed, or hand a region
+   both sides changed differently to resolve(). */
+/* Drop matched runs shorter than k that are only a piece of a word next to
+   deleted text: across a rewritten line the LCS still pairs up stray
+   characters ("2" of "b58_2" with "2" of "R251q"), and anchoring a merge on
+   those splices one side's text into the middle of the other's. A short
+   run of whole words ("L2", "да") is a real match, and so is the tail of a
+   word something was merely typed into ("купи|…|ть"). */
+function dropShortRuns(mt, k, o){
+  const ws=c=>c===' '||c==='\t'||c==='\n';
+  for(let i=0;i<mt.length;){
+    if(mt[i]<0){ i++; continue; }
+    let j=i+1; while(j<mt.length && mt[j]===mt[j-1]+1) j++;
+    // (a run that starts or ends with a space or line break is cut at a boundary itself)
+    const whole=(i===0 || ws(o[i-1]) || ws(o[i])) && (j===o.length || ws(o[j]) || ws(o[j-1]));
+    const nextToDeleted=(i>0 && mt[i-1]<0) || (j<mt.length && mt[j]<0);
+    if(j-i<k && !whole && nextToDeleted) for(let t=i;t<j;t++) mt[t]=-1;
+    i=j;
+  }
+  return mt;
+}
+/* An LCS is ambiguous where text repeats: deleting "строка 2" from
+   "строка 1|строка 2|строка 3" can come out as deleting "2|строка " just as
+   well (same length). Like git's diff slider, shift every pure deletion
+   (and, via the inverse pairing, every pure insertion) along its run of
+   equal characters to where it covers whole lines — otherwise a deletion
+   and an edit in neighbouring lines look like a clash. */
+function slideDeletions(o, xlen, mt){
+  const n=o.length;
+  // whole lines first, then whole words (" T52A" rather than "A T52")
+  const ws=c=>c===' '||c==='\t'||c==='\n';
+  const score=(s,e)=>(o[e-1]==='\n'?4:0)+((s===0||o[s-1]==='\n')?2:0)+((ws(o[s])||ws(o[e-1]))?1:0);
+  for(let s=0;s<n;){
+    if(mt[s]>=0){ s++; continue; }
+    let e=s; while(e<n && mt[e]<0) e++;
+    const xr=()=>e<n?mt[e]:xlen;
+    if((s>0?mt[s-1]:-1)+1!==xr()){ s=e; continue; }             // something inserted here too: not pure
+    // the LCS's own placement stays unless a slide really lands on a line
+    // or word boundary (moving "T24A| T30A" to "T24|A T30|A" only splits runs)
+    let best=s, bestScore=score(s,e);
+    while(s>0 && mt[s-1]>=0 && mt[s-1]===xr()-1 && o[s-1]===o[e-1]){
+      mt[e-1]=mt[s-1]; mt[s-1]=-1; s--; e--;
+      const sc=score(s,e); if(sc>bestScore){ best=s; bestScore=sc; }
+    }
+    while(e<n && mt[e]>=0 && mt[e]===(s>0?mt[s-1]:-1)+1 && o[e]===o[s]){
+      mt[s]=mt[e]; mt[e]=-1; s++; e++;
+      const sc=score(s,e); if(sc>bestScore){ best=s; bestScore=sc; }
+    }
+    while(s>best){ mt[e-1]=mt[s-1]; mt[s-1]=-1; s--; e--; }
+    s=e;
+  }
+  return mt;
+}
+function slideToLines(o, x, mt){
+  slideDeletions(o, x.length, mt);
+  const inv=new Int32Array(x.length).fill(-1);
+  for(let i=0;i<mt.length;i++) if(mt[i]>=0) inv[mt[i]]=i;
+  slideDeletions(x, o.length, inv);
+  mt.fill(-1);
+  for(let j=0;j<inv.length;j++) if(inv[j]>=0) mt[inv[j]]=j;
+  return mt;
+}
+function diff3Merge(o, a, b, resolve, minRun){
+  const ma=lcsMatch(o,a), mb=lcsMatch(o,b), n=o.length, out=[];
+  if(minRun){ slideToLines(o,a,ma); slideToLines(o,b,mb); }
+  if(minRun>1){ dropShortRuns(ma,minRun,o); dropShortRuns(mb,minRun,o); }
+  let conflicts=0, i=0, ia=0, ib=0;
+  for(;;){
+    while(i<n && ma[i]===ia && mb[i]===ib){ out.push(o[i]); i++; ia++; ib++; }
+    if(i>=n && ia>=a.length && ib>=b.length) break;
+    let j=i; while(j<n && !(ma[j]>=0 && mb[j]>=0)) j++;
+    const ea=j<n?ma[j]:a.length, eb=j<n?mb[j]:b.length;
+    const O=o.slice(i,j), A=a.slice(ia,ea), B=b.slice(ib,eb);
+    if(sameArr(A,O)) out.push(...B);
+    else if(sameArr(B,O) || sameArr(A,B)) out.push(...A);
+    else { conflicts++; out.push(...resolve(O,A,B,i)); }
+    i=j; ia=ea; ib=eb;
+  }
+  let keptA=0, keptB=0; for(let k=0;k<n;k++){ if(ma[k]>=0) keptA++; if(mb[k]>=0) keptB++; }
+  return {out, conflicts, keptA, keptB};
+}
+/* Both sides rewrote the same lines. First try the same merge character by
+   character (two edits in different places of one line, or of adjacent
+   lines, combine cleanly). If they really overlap, keep BOTH: the older
+   side's new lines, then the newer side's block — nothing typed is lost. */
+function resolveChunk(O, A, B, aNewer, bWins){
+  const newer=aNewer?A:B, older=aNewer?B:A;
+  if(!O.length) return older.concat(newer);   // both added whole lines at one spot: keep both, older first
+  // the same lines edited in place on both sides: settle them one by one
+  if(O.length>1 && A.length===O.length && B.length===O.length){
+    const out=[];
+    for(let k=0;k<O.length;k++){
+      if(A[k]===O[k] || A[k]===B[k]) out.push(B[k]);
+      else if(B[k]===O[k]) out.push(A[k]);
+      else out.push(...resolveChunk([O[k]],[A[k]],[B[k]],aNewer,bWins));
+    }
+    return out;
+  }
+  const oj=O.join('\n'), aj=A.join('\n'), bj=B.join('\n');
+  if(oj.length+aj.length+bj.length<=30000){
+    // Characters typed at the very same spot on both sides ("молоко" ->
+    // "молоко, хлеб" / "молоко и яйца") are both kept, older first, and new
+    // lines stay whole lines: at the end of a line, what was appended to the
+    // line goes first and the lines added below it after; at the start of a
+    // line, the lines added above go first and what was put in front of the
+    // line after. Only a stretch of the original that BOTH sides rewrote is a
+    // real conflict.
+    let bad=false;
+    const oc=Array.from(oj), ac=Array.from(aj), bc=Array.from(bj);
+    const c=diff3Merge(oc, ac, bc, (o,x,y,at)=>{
+      if(o.length){ bad=true; return []; }
+      const p=(aNewer?y:x).join(''), q=(aNewer?x:y).join('');   // older, newer
+      // one side typed on past the other (a copy that already had the other
+      // insertion): keep the longer one rather than repeating the overlap
+      if(q.startsWith(p) || q.endsWith(p)) return Array.from(q);
+      if(p.startsWith(q) || p.endsWith(q)) return Array.from(p);
+      const lineStart=(at===0 || oc[at-1]==='\n'), lineEnd=(at>=oc.length || oc[at]==='\n');
+      let parts;
+      if(lineStart && !lineEnd){                  // [new lines above][prefix of the line]
+        const cut=t=>t.lastIndexOf('\n')+1;
+        parts=[p.slice(0,cut(p)), q.slice(0,cut(q)), p.slice(cut(p)), q.slice(cut(q))];
+      }else{                                      // [rest of the line][new lines below]
+        const cut=t=>{ const k=t.indexOf('\n'); return k<0 ? t.length : k; };
+        parts=[p.slice(0,cut(p)), q.slice(0,cut(q)), p.slice(cut(p)), q.slice(cut(q))];
+      }
+      return Array.from(parts.join(''));
+    }, oc.length>=12 ? 3 : 1);
+    // a side that dropped most of the original AND wrote new text in its
+    // place rewrote it: that is a conflict, not something to splice into
+    const rewrote=(kept,len)=>kept*2<oc.length && len>kept;
+    if(!bad && !rewrote(c.keptA, ac.length) && !rewrote(c.keptB, bc.length)){
+      const t=c.out.join('');
+      return t==='' && (!A.length || !B.length) ? [] : t.split('\n');
+    }
+  }
+  if(bWins) return B;
+  const known=new Set(newer.concat(O));
+  const extra=older.filter(l=>!known.has(l));
+  if(window.__calcutaMergeLog) window.__calcutaMergeLog({conflict:{O, A, B, aNewer}});   // test hook
+  // a side that emptied the block entirely is ['']; don't leave that blank line behind
+  return extra.concat(extra.length && newer.length===1 && newer[0]==='' ? [] : newer);
+}
+/* Merge two descendants of `base`; on overlapping edits `localNewer`
+   decides which block reads as the current one — or, with `remoteWins`,
+   the remote block simply stands (used to carry a synced change into undo
+   snapshots: there a clash means "this part can no longer be undone"). */
+function merge3(base, local, remote, localNewer, remoteWins){
+  if(local===remote || remote===base) return local;
+  if(local===base) return remote;
+  const out=diff3Merge(base.split('\n'), local.split('\n'), remote.split('\n'),
+                    (O,A,B)=>resolveChunk(O,A,B,localNewer,remoteWins)).out.join('\n');
+  if(window.__calcutaMergeLog) window.__calcutaMergeLog({merge3:{base, local, remote, localNewer, out}});   // test hook
+  return out;
+}
+/* Where does offset `pos` of text `a` land in `b`, a merged version of it?
+   Unchanged lines keep their column; within an edited line the text before
+   and after the edit keeps its place. Used for the caret (a merge that lands
+   while typing must not throw it) and for undo snapshots. */
+function mapCol(a, b, col){
+  let p=0; while(p<a.length && p<b.length && a[p]===b[p]) p++;
+  if(col<=p) return col;
+  let s=0; while(s<a.length-p && s<b.length-p && a[a.length-1-s]===b[b.length-1-s]) s++;
+  if(col>=a.length-s) return Math.max(0, col+(b.length-a.length));
+  return Math.min(col, b.length);
+}
+function mapOffset(a, b, pos){
+  pos=Math.max(0, Math.min(pos|0, a.length));
+  if(a===b) return pos;
+  const n=a.length, m=b.length;
+  let p=0; while(p<n && p<m && a.charCodeAt(p)===b.charCodeAt(p)) p++;
+  if(pos<=p) return pos;
+  let s=0; while(s<n-p && s<m-p && a.charCodeAt(n-1-s)===b.charCodeAt(m-1-s)) s++;
+  if(pos>=n-s) return pos+(m-n);
+  const al=a.split('\n'), bl=b.split('\n');
+  let row=0, acc=0;
+  while(row<al.length-1 && pos>acc+al[row].length){ acc+=al[row].length+1; row++; }
+  const col=pos-acc, mt=lcsMatch(al, bl);
+  let target=mt[row];
+  if(target<0){ let r=row-1; while(r>=0 && mt[r]<0) r--; target=r>=0?mt[r]+1:0; }
+  if(target>=bl.length) return m;
+  let off=0; for(let k=0;k<target;k++) off+=bl[k].length+1;
+  return off+(mt[row]>=0 ? Math.min(col, bl[target].length) : mapCol(al[row], bl[target], col));
+}
+
+/* ---- per-document merge ---- */
+// Last-writer-wins: higher stamp, then content, so the choice never depends
+// on argument order (keeps the base-less merge commutative).
+function lwwDoc(a,b){
+  const au=a.updated||0, bu=b.updated||0;
+  return (bu>au || (bu===au && docSig(b)>docSig(a))) ? b : a;
+}
+// Keep L over R, with a stamp past R's: a document's stamp only ever climbs
+// along the server's history, which is what lets a late (stale) delivery be
+// recognised below.
+function bumpPast(L,R){ return (L.updated||0)>(R.updated||0) ? L : Object.assign({}, L, {updated:stamp()}); }
+function mergeDoc(L, R, b){
+  if(!b) return lwwDoc(L,R);
+  const bt=b.text||'', bn=b.name||'';
+  const lt=(L.text||'')!==bt, ln=(L.name||'')!==bn;
+  // a server copy OLDER than the base is a late, superseded delivery (an
+  // out-of-order read): it is not news, whatever its content
+  const stale=(R.updated||0)<(b.updated||0);
+  const rt=!stale && (R.text||'')!==bt, rn=!stale && (R.name||'')!==bn;
+  if(!rt && !rn) return (lt||ln) ? bumpPast(L,R) : (stale ? L : lwwDoc(L,R));
+  if(!lt && !ln) return R;
+  const lNewer=(L.updated||0)>=(R.updated||0);
+  const text=!rt ? (L.text||'') : !lt ? (R.text||'') : merge3(bt, L.text||'', R.text||'', lNewer);
+  const name=!rn ? L.name : !ln ? R.name : (lNewer ? L.name : R.name);
+  if(text===(R.text||'') && (name||'')===(R.name||'')) return R;
+  if(text===(L.text||'') && (name||'')===(L.name||'')) return bumpPast(L,R);
+  return Object.assign({}, lNewer?L:R, {text, name, updated:stamp()});
+}
+
+/* Merge two stores. With `bases` (id -> base) documents changed on both
+   sides are merged three-way; without, per-doc last-writer-wins
+   (deterministic and commutative). */
+function mergeStores(local, remote, bases){
   local=local||{}; remote=remote||{};
   const tomb={};
   const addTomb=m=>{ if(m&&typeof m==='object') for(const id in m) tomb[id]=Math.max(tomb[id]||0, m[id]||0); };
   addTomb(local.deletedDocs); addTomb(remote.deletedDocs);
 
-  const byId=new Map();
-  const consider=d=>{
-    if(!d||!d.id) return;
-    const ex=byId.get(d.id);
-    if(!ex){ byId.set(d.id,d); return; }
-    const du=d.updated||0, eu=ex.updated||0;
-    // higher timestamp wins; on an exact tie, break by content so the choice
-    // is independent of argument order (keeps the merge commutative).
-    if(du>eu || (du===eu && docSig(d)>docSig(ex))) byId.set(d.id,d);
+  const side=list=>{
+    const m=new Map();
+    (list||[]).forEach(d=>{ if(!d||!d.id) return; const ex=m.get(d.id); m.set(d.id, ex?lwwDoc(ex,d):d); });
+    return m;
   };
-  (local.docs||[]).forEach(consider);
-  (remote.docs||[]).forEach(consider);
+  const byId=side(local.docs);
+  for(const [id,r] of side(remote.docs)){
+    const l=byId.get(id);
+    byId.set(id, !l ? r : bases ? mergeDoc(l, r, bases[id]) : lwwDoc(l, r));
+  }
 
   const docs=[];
-  for(const [id,d] of byId){
-    if(!d.protected && (tomb[id]||0) >= (d.updated||0)) continue;   // deletion wins
+  for(let [id,d] of byId){
+    if(!d.protected && (tomb[id]||0) >= (d.updated||0)){
+      // Deletion wins — unless this copy carries an edit made since the last
+      // sync (its base): that edit is concurrent with the delete, whatever
+      // the clocks say, and is kept (the doc comes back with it).
+      const b=bases && bases[id];
+      const edited=b && (d.updated||0)>(b.updated||0) && ((d.text||'')!==b.text || (d.name||'')!==b.name);
+      if(!edited) continue;
+      d=Object.assign({}, d, {updated:stamp()});
+      byId.set(id, d);
+    }
     docs.push(d);
   }
   // prune tombstones that no longer suppress anything (doc re-created/edited
@@ -4720,10 +5071,8 @@ function mergeStores(local, remote){
   }
 
   // Tags merge PER TAG (keyed by lowercased label) with tombstones — exactly
-  // like docs. Whole-list last-write-wins used to silently drop a tag added on
-  // one device (and was defeated by client-clock skew, the same reason docs
-  // moved off it). Now additions on different devices union, and a delete only
-  // wins over versions of the tag at-or-older than the tombstone.
+  // like docs: additions on different devices union, and a delete only wins
+  // over versions of the tag at-or-older than the tombstone.
   const tagTomb={};
   const addTagTomb=m=>{ if(m&&typeof m==='object') for(const k in m) tagTomb[k]=Math.max(tagTomb[k]||0, m[k]||0); };
   addTagTomb(local.deletedTags); addTagTomb(remote.deletedTags);
@@ -4777,11 +5126,19 @@ function syncPayload(s){
   const tagTomb={}; Object.keys(s.deletedTags||{}).sort().forEach(k=>tagTomb[k]=s.deletedTags[k]);
   return JSON.stringify({docs, deletedDocs:tomb, tags, tagsUpdated:s.tagsUpdated||0, deletedTags:tagTomb});
 }
+/* What an upload writes: the synced fields only (no device-local prefs),
+   plus the format version. set() replaces the whole cloud doc, so it also
+   clears every `pending` close-flush entry — they are folded into `next`. */
+function cloudDoc(s){
+  const data={ docs:s.docs||[], deletedDocs:s.deletedDocs||{}, tags:s.tags||[], tagsUpdated:s.tagsUpdated||0,
+               deletedTags:s.deletedTags||{}, forceEpoch:s.forceEpoch||0, updated:Date.now() };
+  return { data: JSON.stringify(data), updated: Date.now(), proto: SYNC_PROTO };
+}
+function cloneStore(s){ return JSON.parse(JSON.stringify(s)); }
 
-function parseRemote(raw){
-  if(!raw||!raw.data) return null;
-  let s; try{ s=JSON.parse(raw.data); }catch(e){ return null; }
-  if(!s||!Array.isArray(s.docs)) return null;
+/* Shape any store-like object coming from outside this tab (cloud copy,
+   close-flush entry, another tab's save) the way load() shapes the local one. */
+function normalizeRemoteShape(s){
   s.docs.forEach(d=>{
     if(!d.id) d.id=uid();
     if(d.protected && d.protected!=='tasks' && d.protected!=='personal') delete d.protected;
@@ -4791,7 +5148,7 @@ function parseRemote(raw){
     d.id=canonicalDocId(d);
     if(typeof d.updated!=='number') d.updated=0;
   });
-  if(!s.tags) s.tags=[];
+  if(!Array.isArray(s.tags)) s.tags=[];
   if(typeof s.tagsUpdated!=='number') s.tagsUpdated=0;
   // older cloud copies stored tags without per-tag timestamps
   s.tags.forEach(t=>{ if(typeof t.updated!=='number') t.updated = s.tagsUpdated||1; });
@@ -4799,231 +5156,364 @@ function parseRemote(raw){
   if(!s.deletedTags || typeof s.deletedTags!=='object') s.deletedTags={};
   return s;
 }
+/* Legacy colours / markup, and the logical clock past everything in it. */
+function prepRemote(s){ snapStoreColors(s); normalizeStoreDocs(s); observeStore(s); return s; }
 
-/* Adopt a merged store into the app without yanking text the user is actively
-   editing. Device-local view prefs are preserved from the current session. */
-function adoptMerged(merged){
-  merged.activeId=store.activeId;
-  merged.resultsWidth=store.resultsWidth;
-  merged.pinned=store.pinned;                 // pins are device-local, like activeId
-  if(!merged.tags) merged.tags=[];
-  if(!merged.deletedTags || typeof merged.deletedTags!=='object') merged.deletedTags={};
-  if(!merged.docs.length) merged.docs.push(makeTasksDoc());          // never end up doc-less
-  if(!merged.docs.some(d=>d.id===merged.activeId)) merged.activeId=merged.docs[0].id;
-
-  // Protect the open doc from an incoming overwrite ONLY while the user is
-  // actually typing (recent edit + focus). Mere focus used to freeze the doc
-  // forever — on phones the textarea keeps focus indefinitely, so an idle
-  // device never showed edits made elsewhere, and its next keystroke pushed
-  // the stale text back over them.
-  // If the active doc vanished remotely (deleted elsewhere), merged.activeId
-  // now points at a FALLBACK doc. The editing branch below must then be dead:
-  // it writes input.value (the DELETED doc's text!) into whatever doc it finds
-  // under merged.activeId — i.e. straight into the fallback, corrupting it.
-  const activeVanished = (merged.activeId !== store.activeId);
-  let editing = !activeVanished && (document.activeElement===input) && (Date.now()-lastEditAt < 4000);
-  let suppressed=false;
-  if(editing){
-    const cur=store.docs.find(d=>d.id===merged.activeId);
-    const inc=merged.docs.find(d=>d.id===merged.activeId);
-    // keep the in-editor text/edit-time for the doc under the cursor; other
-    // docs and metadata still update live. The user's next save re-uploads it.
-    if(cur && inc){ suppressed=(inc.text!==input.value); inc.text=input.value; inc.updated=cur.updated; }
-    else editing=false;
+function parseRemote(raw){
+  if(!raw) return null;
+  const pend=(raw.pending && typeof raw.pending==='object' && Object.keys(raw.pending).length) ? raw.pending : null;
+  let s=null;
+  if(raw.data){
+    try{ s=JSON.parse(raw.data); }catch(e){ return null; }
+    if(!s||!Array.isArray(s.docs)) return null;
+  }else if(pend) s={docs:[]};
+  else return null;
+  normalizeRemoteShape(s);
+  if(pend) s=foldPending(s, pend);
+  s.__proto=(typeof raw.proto==='number') ? raw.proto : 0;
+  return s;
+}
+/* Close-flush entries (see keepaliveFlush) are merged into the server copy
+   on read, each against the base its device had: they add that device's
+   last edits without being able to revert anything newer. The result is
+   flagged so the reader uploads it — which also clears the entries. */
+function foldPending(s, pend){
+  const entries=[];
+  for(const k in pend){
+    let e=pend[k];
+    if(typeof e==='string'){ try{ e=JSON.parse(e); }catch(_){ e=null; } }
+    if(e && typeof e==='object' && Array.isArray(e.docs)) entries.push(e);
   }
-
-  store=merged;
-  saveLocal();
-  applyResultsWidth(store.resultsWidth);
-  renderTags(); renderDocs();
-  if(editing) render();
-  else{
-    // keep the caret roughly in place when the editor is focused but idle
-    const focused=(document.activeElement===input);
-    const caret=focused ? input.selectionStart : 0;
-    loadActiveIntoEditor();
-    if(focused){ const c=Math.min(caret, input.value.length); input.setSelectionRange(c,c); }
+  entries.sort((a,b)=>(a.at||0)-(b.at||0));
+  prepRemote(s);
+  for(const e of entries){
+    prepRemote(normalizeRemoteShape(e));
+    s=mergeStores(e, s, (e.bases && typeof e.bases==='object') ? e.bases : {});
   }
-  return suppressed;
+  s.__pending=true;
+  return s;
 }
 
-/* Wholesale adopt a hard-saved remote version — no merge, no editing
-   protection. Only device-local view prefs (active tab, pins, column width)
-   are kept; every synced field is replaced with the forced version. */
-function adoptForced(remote){
-  const next=remote;
+/* Record the server versions just seen as the new bases. Never moves a base
+   backwards (a late, older delivery), and forgets bases of documents gone
+   from both this device and the server. */
+function setBases(s){
+  if(!s || !Array.isArray(s.docs)) return;
+  for(const d of s.docs){
+    const cur=docBases[d.id];
+    if(!cur || (d.updated||0)>=(cur.updated||0)) docBases[d.id]={text:d.text||'', name:d.name||'', updated:d.updated||0};
+  }
+  for(const id in docBases){
+    if(!s.docs.some(d=>d.id===id) && !store.docs.some(d=>d.id===id)) delete docBases[id];
+  }
+}
+/* The store must hold exactly what is on screen before anything merges
+   into it (canonicalizeNumbers on blur, for one, only saves 300ms later). */
+function flushEditor(){
+  if(composing || sharedMode) return;
+  const d=doc(); if(d && d.text!==input.value){ window.__calcutaSyncLog && syncTrace('flushEditor', {id:d.id, from:d.text, to:input.value}); d.text=input.value; d.updated=stamp(); }
+}
+
+/* Install a merged store as the app's state. The open document is updated
+   LIVE — no more holding remote text off the editor while the user types
+   (that hold was how a stale editor overwrote newer edits). The caret stays
+   on the same text, and the undo history is rebased onto the new text. */
+function applyStore(next){
+  // nothing new (the echo of our own upload, an idle heartbeat read): keep
+  // the store and skip the re-render — only the bases may have moved
+  if(syncPayload(next)===syncPayload(store) && (next.forceEpoch||0)<=(store.forceEpoch||0)){ saveLocal(); return; }
   next.activeId=store.activeId;
   next.resultsWidth=store.resultsWidth;
-  next.pinned=store.pinned;
-  if(!next.tags) next.tags=[];
+  next.pinned=store.pinned;                 // pins are device-local, like activeId
+  if(!Array.isArray(next.tags)) next.tags=[];
+  if(!next.deletedDocs || typeof next.deletedDocs!=='object') next.deletedDocs={};
   if(!next.deletedTags || typeof next.deletedTags!=='object') next.deletedTags={};
-  if(!next.docs.length) next.docs.push(makeTasksDoc());
+  if(typeof next.tagsUpdated!=='number') next.tagsUpdated=0;
+  delete next.__pending; delete next.__proto;
+  if(!next.docs.length) next.docs.push(makeTasksDoc());          // never end up doc-less
   if(!next.docs.some(d=>d.id===next.activeId)) next.activeId=next.docs[0].id;
+
+  const before=new Map(store.docs.map(d=>[d.id, d.text||'']));
+  const prevActive=store.activeId, oldVal=input.value;
+  const focused=(document.activeElement===input);
+  const s0=input.selectionStart, s1=input.selectionEnd;
   store=next;
-  saveLocal();
   applyResultsWidth(store.resultsWidth);
-  renderTags(); renderDocs();
-  loadActiveIntoEditor();
-}
-
-/* Listen to the cloud doc. The FIRST snapshot reconciles this device with the
-   cloud (merge, adopt, and push back anything the cloud was missing); later
-   snapshots are live updates from other devices. cloudReady gates uploads so
-   a save can never race ahead of that first reconciliation and clobber the
-   cloud with un-merged local (e.g. freshly-seeded) content. */
-function subscribeCloud(){
-  if(!db||!currentUser) return;
-  cloudReady=false;
-  cloudRef=db.collection('users').doc(currentUser.uid);
-  let first=true;
-  if(cloudUnsub){ cloudUnsub(); cloudUnsub=null; }
-  cloudUnsub=cloudRef.onSnapshot({includeMetadataChanges:true}, snap=>{
-    if(snap.metadata.hasPendingWrites) return;      // our own optimistic write echoing back
-    // Only ever SEED against authoritative server data. A fromCache snapshot that
-    // reports the doc MISSING can be a cold-cache lie (offline/blocked boot) — acting
-    // on it would run the "cloud empty → seed it" branch and push THIS device's
-    // freshly-seeded STOCK content over the real cloud, wiping the user's notes. So
-    // that specific case still waits for the server.
-    // BUT a fromCache snapshot that HAS data is safe to merge against (merge is
-    // non-destructive), and crucially it lets a device whose live server channel is
-    // slow or blocked (corporate firewall/VPN, weak mobile) still flip cloudReady and
-    // START UPLOADING. The writes then enter Firestore's durable offline queue and
-    // flush the moment connectivity returns — instead of sitting only in this
-    // device's localStorage all session and dying when it's shut down (the exact
-    // cross-device "my last edits didn't show up" failure). includeMetadataChanges
-    // still delivers the later cache→server transition, which re-merges and corrects.
-    if(!snap.metadata.fromCache) serverSeenAt=Date.now();
-    if(snap.metadata.fromCache && !snap.exists) return;
-    if(!snap.exists){
-      if(first){ first=false; cloudReady=true; pushCloud(); }   // cloud truly empty (server-confirmed): seed it
-      return;
+  renderTags();
+  if(store.activeId!==prevActive){
+    loadActiveIntoEditor();               // the open doc was deleted elsewhere: show the fallback
+  }else{
+    const d=doc(), t=d.text||'';
+    if(t!==oldVal){
+      const a=mapOffset(oldVal, t, s0), b=(s1===s0) ? a : mapOffset(oldVal, t, s1);
+      input.value=t;
+      if(focused) input.setSelectionRange(a, b);
+      autoIndent(); applyMask();
+      if(d.text!==input.value) d.text=input.value;   // formatting is not an edit
     }
-    const remote=parseRemote(snap.data());
-    if(!remote){ if(first){ first=false; cloudReady=true; } return; }
-    const diverged=reconcileRemote(remote);
-    if(first){ first=false; cloudReady=true; }
-    if(diverged) pushCloud();                        // cloud was missing some of our data → push merge
-  }, syncError);
+    render(); renderDocs();
+  }
+  const changes=new Map();
+  for(const d of store.docs){
+    const o=(d.id===prevActive) ? oldVal : before.get(d.id), t=d.text||'';
+    if(o!==undefined && o!==t) changes.set(d.id, {oldText:o, newText:t});
+  }
+  rebaseHistories(changes);
+  saveLocal();
 }
 
-/* Reconcile a parsed remote store into this device: advance the clock, honor
-   a newer hard-save wholesale, otherwise merge per doc. Returns true when the
-   cloud is missing something we have (caller should push the merge back).
-   Shared by the live snapshot listener and the wake-up server pull so both
-   paths behave identically. */
+/* A HARD SAVE from another device (higher forceEpoch) means "make every
+   device exactly this version": adopt it wholesale. Only edits made here
+   AFTER that save are kept (merged in) — they cannot be what it meant to
+   discard. Returns true when such edits were kept (they must be uploaded).
+   `fromServer` false: the forced copy came from another tab, not the server,
+   so it must not become this device's bases. */
+function adoptForced(remote, fromServer){
+  const epoch=remote.forceEpoch||0;
+  const keep=store.docs.filter(d=>(d.updated||0)>epoch && !remote.docs.some(r=>r.id===d.id && docSig(r)===docSig(d)));
+  const next=keep.length ? mergeStores({docs:keep}, remote, docBases) : remote;
+  next.forceEpoch=epoch;
+  if(fromServer!==false) setBases(remote);
+  applyStore(next);
+  return keep.length>0;
+}
+
+/* Reconcile a server copy into this device: merge, adopt, and report
+   whether the server is missing something we have (caller pushes then). */
 function reconcileRemote(remote){
-  snapStoreColors(remote);   // a device that hasn't migrated yet can still send legacy colours
-  normalizeStoreDocs(remote);   // …and legacy-markup docs
-  observeStore(remote);   // advance the logical clock past everything the cloud has seen
-  // HARD SAVE from another device: a higher forceEpoch means "make every device
-  // exactly this version". Adopt it wholesale, discarding any local divergence
-  // (even mid-typing) — strict by design, the whole point of the button.
+  flushEditor();
+  prepRemote(remote);
+  window.__calcutaSyncLog && syncTrace('reconcile', {local:store.docs.map(d=>[d.id,d.text,d.updated]), remote:remote.docs.map(d=>[d.id,d.text,d.updated]), bases:docBases});
+  let diverged;
   if((remote.forceEpoch||0) > (store.forceEpoch||0)){
-    adoptForced(remote);
-    lastSyncedPayload=syncPayload(remote);
-    return false;
+    diverged=adoptForced(remote);
+  }else{
+    const merged=mergeStores(store, remote, docBases);
+    setBases(remote);
+    applyStore(merged);
+    diverged=syncPayload(store)!==syncPayload(remote);
   }
-  const merged=mergeStores(store, remote);
-  const suppressed=adoptMerged(merged);
-  if(suppressed) deferRemote(remote);              // re-merge once typing pauses
-  else { deferredRemote=null; clearTimeout(deferredTimer); }  // newer snapshot superseded any deferral
-  const diverged = syncPayload(merged)!==syncPayload(remote);
-  if(!diverged) lastSyncedPayload=syncPayload(merged);   // cloud already has everything → mark clean
+  if(remote.__pending) diverged=true;       // fold close-flush entries in for good
+  if(!diverged) lastSyncedPayload=syncPayload(store);   // cloud already has everything → clean
   return diverged;
 }
 
-/* Actively pull the authoritative server copy and reconcile — called when the
-   tab wakes up (visibilitychange→visible, pageshow) or connectivity returns.
-   After hours of sleep the push channel can take seconds-to-forever to notice
-   it is stale; until then this device would both SHOW old data and treat its
-   old copy as current. One explicit server read closes that window. */
-let serverPullInflight=false;
-function refreshFromServer(){
-  if(!db||!currentUser||!cloudRef||serverPullInflight) return;
-  serverPullInflight=true;
-  refreshIdToken();   // sleep can outlive the ~1h ID token; keepaliveFlush needs a live one
-  cloudRef.get({source:'server'}).then(snap=>{
-    serverSeenAt=Date.now();
-    if(!snap.exists){ if(cloudReady && isCloudDirty()) pushCloud(); return; }
-    const remote=parseRemote(snap.data());
-    if(!remote) return;
-    const diverged=reconcileRemote(remote);
-    cloudReady=true;   // we reconciled against authoritative data — uploads are safe
-    if(diverged) pushCloud();
-  }).catch(()=>{}).then(()=>{ serverPullInflight=false; });
+/* Server copies that arrive while a transaction of ours is in flight, or in
+   the middle of an IME composition, are held and merged right after: the
+   transaction's own result must land first (it sets the bases), and a
+   composition must not have the text changed under it. */
+let heldRemotes=[];
+function syncBusy(){ return pushInflight || hardInflight || composing; }
+function releaseHeld(){
+  if(syncBusy() || !heldRemotes.length) return;
+  const list=heldRemotes; heldRemotes=[];
+  let diverged=false;
+  for(const r of list) diverged=reconcileRemote(r) || diverged;
+  cloudReady=true;
+  if(diverged) pushCloud();
+}
+/* Every server copy — listener, wake-up read — comes through here. */
+function handleRemoteRaw(raw){
+  const remote=parseRemote(raw);
+  if(!remote){ cloudReady=true; return; }   // unreadable cloud copy: the next upload replaces it
+  if(remote.__proto>SYNC_PROTO){ protoBlock(); return; }
+  if(syncBusy()){ heldRemotes.push(remote); if(heldRemotes.length>4) heldRemotes.shift(); return; }
+  const diverged=reconcileRemote(remote);
+  cloudReady=true;   // reconciled — uploads are safe now
+  if(diverged) pushCloud();
 }
 
-/* An update that arrives mid-typing is held off the active doc (the user's
-   in-progress text wins the moment). Retry the merge after the typing window
-   so the newer remote text still lands once the user pauses — otherwise it
-   would be lost until some unrelated future snapshot. */
-let deferredRemote=null, deferredTimer=null;
-function deferRemote(remote){
-  deferredRemote=remote;
-  clearTimeout(deferredTimer);
-  deferredTimer=setTimeout(function retry(){
-    if(!deferredRemote) return;
-    const m=mergeStores(store, deferredRemote);
-    if(adoptMerged(m)){ deferredTimer=setTimeout(retry, 4500); return; }  // still typing
-    deferredRemote=null;
-    pushCloud();   // publish the settled merge so every device converges
-  }, 4500);
+/* Another tab of the app saved (localStorage). Merge its store in, against
+   the older of the two tabs' bases — their common ancestor — and take the
+   newer base afterwards. Without this, the tab that saved last wrote back
+   its own stale copy and erased the other tab's edits. Returns true when
+   the other tab's copy lacks something this tab has (write it back then). */
+function integrateLocal(raw){
+  let o; try{ o=JSON.parse(raw); }catch(e){ return false; }
+  if(!o || !Array.isArray(o.docs)) return false;
+  const ob=(o._bases && typeof o._bases==='object' && (o._basesUid||null)===docBasesUid) ? o._bases : {};
+  delete o._bases; delete o._basesUid;
+  flushEditor();
+  prepRemote(normalizeRemoteShape(o));
+  if((o.forceEpoch||0) > (store.forceEpoch||0)){
+    for(const id in ob) if(!docBases[id] || (ob[id].updated||0)>(docBases[id].updated||0)) docBases[id]=ob[id];
+    adoptForced(o, false);
+    return syncPayload(store)!==syncPayload(o);
+  }
+  const common={};
+  for(const id in docBases){ const x=docBases[id], y=ob[id]; if(x && y) common[id]=((y.updated||0)<(x.updated||0)) ? y : x; }
+  const merged=mergeStores(store, o, common);
+  for(const id in ob) if(!docBases[id] || (ob[id].updated||0)>(docBases[id].updated||0)) docBases[id]=ob[id];
+  if(syncPayload(merged)!==syncPayload(store)) applyStore(merged);
+  return syncPayload(store)!==syncPayload(o);
 }
-// Dirtiness is derived from CONTENT, not a hand-toggled flag: lastSyncedPayload
-// holds the syncPayload() string that the server last confirmed (via an ack or a
-// non-diverged snapshot). isCloudDirty() = the store's current syncPayload differs
-// from that. This is immune to debounce/timer interleaving that made a boolean
-// flag unreliable. `everEdited` avoids warning on a no-edit offline close.
-let lastSyncedPayload=null, everEdited=false, cachedIdToken=null;
-function isCloudDirty(){ return !!currentUser && everEdited && syncPayload(store)!==lastSyncedPayload; }
-/* Read-merge-write upload. The transaction's get() sees the CURRENT server
-   copy (even one written seconds ago by another device that this device's
-   listener hasn't delivered yet), merges per doc, and commits — Firestore
-   retries the whole callback on a concurrent write, so the merge is always
-   against the version that actually wins. Offline the transaction FAILS
-   rather than queueing a blind overwrite (the durable-queued set() of the old
-   implementation was itself a clobber vector: it could land days later on top
-   of much newer data). Nothing is lost by failing: the edit is already in
-   localStorage, and the retry timer / 'online' / wake-up paths re-push. */
-let pushInflight=false, pushRetryTimer=null;
-function pushCloudNow(){
-  if(!db||!currentUser||!cloudRef||!cloudReady) return;
-  if(pushInflight) return;               // the in-flight push re-checks dirtiness when it lands
-  pushInflight=true;
-  clearTimeout(pushRetryTimer);
-  setSyncStatus('saving');
-  let adopt=null, sent=null;
-  db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
-    adopt=null;                          // reset per attempt — the callback re-runs on contention
-    const remote=snap.exists?parseRemote(snap.data()):null;
-    if(remote){ snapStoreColors(remote); normalizeStoreDocs(remote); observeStore(remote); }
-    if(remote && (remote.forceEpoch||0)>(store.forceEpoch||0)){
-      adopt={forced:remote}; sent=syncPayload(remote);
-      return;                            // a newer hard save stands — adopt it, write nothing
+
+/* Listen to the cloud doc. The FIRST server snapshot reconciles this device
+   with the cloud (merge, adopt, push back what the cloud was missing);
+   later ones are live updates from other devices. cloudReady gates uploads
+   so a save can never race ahead of that first reconciliation. A listener
+   that errors is dead for good in Firestore — it is re-opened with backoff
+   (it used to stay dead, and the device silently stopped receiving). */
+let listenSeq=0, listenRetryTimer=null, listenBackoff=0, lastResubAt=0;
+function subscribeCloud(){
+  if(!db||!currentUser) return;
+  clearTimeout(listenRetryTimer); listenRetryTimer=null;
+  cloudRef=db.collection('users').doc(currentUser.uid);
+  const seq=++listenSeq;
+  if(cloudUnsub){ try{ cloudUnsub(); }catch(e){} cloudUnsub=null; }
+  cloudUnsub=cloudRef.onSnapshot({includeMetadataChanges:true}, snap=>{
+    if(seq!==listenSeq) return;
+    if(snap.metadata.hasPendingWrites) return;      // our own optimistic write echoing back
+    if(!snap.metadata.fromCache){ serverSeenAt=Date.now(); listenBackoff=0; }
+    // Only SEED against authoritative data: a cache snapshot that reports the
+    // doc missing can be a cold-cache lie, and seeding on it would upload this
+    // device's stock content as if the cloud were empty.
+    if(snap.metadata.fromCache && !snap.exists) return;
+    if(!snap.exists){
+      if(!cloudReady){ cloudReady=true; pushCloud(); }   // cloud truly empty (server-confirmed): seed it
+      return;
     }
-    const next=remote?mergeStores(store,remote):store;
-    sent=syncPayload(next);
-    if(remote && sent!==syncPayload(store)) adopt={merged:next};   // remote had news for us
-    tx.set(cloudRef,{ data: JSON.stringify(next), updated: Date.now() });
-  })).then(()=>{
-    serverSeenAt=Date.now();
-    if(adopt){ if(adopt.forced) adoptForced(adopt.forced); else adoptMerged(adopt.merged); }
-    lastSyncedPayload=sent;
-    syncError(null); setSyncStatus('saved');
-    pushInflight=false;
-    // content-only dirtiness (no everEdited): the store can differ from the
-    // cloud without a this-session edit (e.g. last session's data never made
-    // it up), and the user may also have kept typing while we were in flight
-    if(syncPayload(store)!==lastSyncedPayload) pushCloud();
-  }).catch(err=>{
-    pushInflight=false;
+    handleRemoteRaw(snap.data());
+  }, err=>{
+    if(seq!==listenSeq) return;
     syncError(err);
-    clearTimeout(pushRetryTimer);        // offline/unreachable: localStorage has it — retry soon
-    pushRetryTimer=setTimeout(()=>{ if(syncPayload(store)!==lastSyncedPayload) pushCloud(); }, 15000);
+    cloudUnsub=null;
+    listenBackoff=Math.min(listenBackoff ? listenBackoff*2 : 2000, 60000);
+    clearTimeout(listenRetryTimer);
+    listenRetryTimer=setTimeout(()=>{ if(currentUser && seq===listenSeq) subscribeCloud(); }, listenBackoff);
   });
 }
+/* Re-open the listener (wake after a long sleep, network back): a socket
+   that died without an error would otherwise never deliver again. */
+function resubscribe(){
+  if(!db||!currentUser) return;
+  if(Date.now()-lastResubAt<30000) return;
+  lastResubAt=Date.now();
+  subscribeCloud();
+}
+
+/* Actively read the authoritative server copy and reconcile — on wake, when
+   connectivity returns, and from the heartbeat. A read that never answers
+   (a wedged connection after sleep) is abandoned after SYNC_T.pullTimeout
+   and retried with backoff; it used to block every later read for good. */
+let serverPullInflight=false, pullSeq=0, pullStartedAt=0, pullRetryTimer=null, pullBackoff=0;
+function refreshFromServer(){
+  if(!db||!currentUser||!cloudRef) return;
+  if(serverPullInflight && Date.now()-pullStartedAt<SYNC_T.pullTimeout) return;
+  const seq=++pullSeq;
+  serverPullInflight=true; pullStartedAt=Date.now();
+  clearTimeout(pullRetryTimer); pullRetryTimer=null;
+  refreshIdToken();   // sleep can outlive the ~1h ID token; keepaliveFlush needs a live one
+  const fail=()=>{
+    if(seq!==pullSeq || !serverPullInflight) return;
+    serverPullInflight=false;
+    pullBackoff=Math.min(pullBackoff ? pullBackoff*2 : 5000, 60000);
+    clearTimeout(pullRetryTimer);
+    pullRetryTimer=setTimeout(()=>{ pullRetryTimer=null; if(document.visibilityState==='visible' && navigator.onLine) refreshFromServer(); }, pullBackoff);
+  };
+  const timer=setTimeout(fail, SYNC_T.pullTimeout);
+  cloudRef.get({source:'server'}).then(snap=>{
+    clearTimeout(timer);
+    serverSeenAt=Date.now();
+    if(seq===pullSeq){ serverPullInflight=false; pullBackoff=0; }
+    // even a late answer is real server data: merging it is safe (stale
+    // copies are recognised per document), so it is never thrown away
+    if(!snap.exists){ if(!cloudReady) cloudReady=true; if(isStoreDirty()) pushCloud(); return; }
+    handleRemoteRaw(snap.data());
+  }, ()=>{ clearTimeout(timer); fail(); });
+}
+
+// Dirtiness is derived from CONTENT: lastSyncedPayload holds the
+// syncPayload() the server last confirmed (an ack or a matching snapshot).
+// `everEdited` keeps the close-time warning quiet after a no-edit session.
+let lastSyncedPayload=null, everEdited=false, cachedIdToken=null;
+function isStoreDirty(){ return syncPayload(store)!==lastSyncedPayload; }
+function isCloudDirty(){ return !!currentUser && everEdited && isStoreDirty(); }
+
+/* Read-merge-write upload. The transaction's get() sees the CURRENT server
+   copy, merges per doc (three-way) and commits; Firestore re-runs the
+   callback on a concurrent write. Offline it fails instead of queueing a
+   blind overwrite — nothing is lost, the edit is in localStorage and the
+   retry / 'online' / wake / heartbeat paths re-push. A transaction that
+   never settles is abandoned by a watchdog (a wedged channel used to leave
+   pushInflight set forever, so no later edit was uploaded again). */
+let pushInflight=false, pushRetryTimer=null, pushSeq=0, pushWatchdog=null;
+function schedulePushRetry(ms){
+  clearTimeout(pushRetryTimer);
+  pushRetryTimer=setTimeout(()=>{ pushRetryTimer=null; if(isStoreDirty()) pushCloud(); }, ms);
+}
+function pushCloudNow(){
+  clearTimeout(cloudSaveTimer); cloudSaveTimer=null;
+  if(!db||!currentUser||!cloudRef||!cloudReady||protoBlocked) return;
+  if(pushInflight || hardInflight) return;   // the in-flight one re-checks dirtiness when it lands
+  // mid-composition (phone keyboards compose every word) the merged result
+  // could not be put on screen: wait — compositionend saves and pushes
+  if(composing){ schedulePushRetry(1500); return; }
+  const seq=++pushSeq;
+  pushInflight=true;
+  clearTimeout(pushRetryTimer); pushRetryTimer=null;
+  setSyncStatus('saving');
+  clearTimeout(pushWatchdog);
+  pushWatchdog=setTimeout(()=>{
+    if(seq!==pushSeq || !pushInflight) return;
+    pushInflight=false; pushSeq++;          // a late answer of this attempt is ignored
+    syncError(new Error('sync push timed out'));
+    schedulePushRetry(3000);
+    releaseHeld();
+  }, SYNC_T.pushTimeout);
+  flushEditor();
+  let result=null;
+  db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
+    result=null;                         // reset per attempt — the callback re-runs on contention
+    const remote=snap.exists ? parseRemote(snap.data()) : null;
+    if(remote && remote.__proto>SYNC_PROTO){ result={blocked:true}; return; }
+    if(remote) prepRemote(remote);
+    if(remote && (remote.forceEpoch||0)>(store.forceEpoch||0)){ result={forced:remote}; return; }
+    const sent=cloneStore(store), bases=Object.assign({}, docBases);
+    const next=remote ? mergeStores(sent, remote, bases) : mergeStores(sent, {});
+    result={next, sent};
+    tx.set(cloudRef, cloudDoc(next));
+  })).then(()=>{
+    if(seq!==pushSeq) return;            // abandoned by the watchdog meanwhile
+    clearTimeout(pushWatchdog);
+    pushInflight=false;
+    serverSeenAt=Date.now();
+    if(result && result.blocked){ protoBlock(); return; }
+    if(result && result.forced){
+      if(!adoptForced(result.forced)) lastSyncedPayload=syncPayload(store);
+    }else if(result) afterCommit(result.next, result.sent);
+    syncError(null); setSyncStatus('saved');
+    releaseHeld();
+    // the user may have kept typing while we were in flight
+    if(isStoreDirty()) pushCloud();
+  }).catch(err=>{
+    if(seq!==pushSeq) return;
+    clearTimeout(pushWatchdog);
+    pushInflight=false;
+    syncError(err);
+    schedulePushRetry(15000);            // offline/unreachable: localStorage has it — retry soon
+    releaseHeld();
+  });
+}
+/* `next` is now the server copy. Bring this device onto it: as is if
+   nothing changed here meanwhile, else merged with the typing done during
+   the round trip (against `sent`, the store the upload was computed from). */
+function afterCommit(next, sent){
+  serverSeenAt=Date.now();
+  window.__calcutaSyncLog && syncTrace('afterCommit', {next:next.docs.map(d=>[d.id,d.text,d.updated]), sent:sent.docs.map(d=>[d.id,d.text,d.updated]), store:store.docs.map(d=>[d.id,d.text,d.updated])});
+  const mine=cloneStore(next);
+  if(syncPayload(store)===syncPayload(sent)) applyStore(mine);
+  else{
+    const anc={};
+    sent.docs.forEach(d=>{ anc[d.id]={text:d.text||'', name:d.name||'', updated:0}; });
+    applyStore(mergeStores(store, mine, anc));
+  }
+  setBases(next);
+  saveLocal();
+  lastSyncedPayload=syncPayload(next);
+}
 function pushCloud(){
-  if(!db||!currentUser||!cloudRef||!cloudReady) return;
+  if(!db||!currentUser||!cloudRef||!cloudReady||protoBlocked) return;
   clearTimeout(cloudSaveTimer);
   setSyncStatus('saving');
   cloudSaveTimer=setTimeout(pushCloudNow, 500);
@@ -5033,55 +5523,66 @@ function cloudSave(){ everEdited=true; if(cloudReady) pushCloud(); }
 /* HARD SAVE — make sure THIS device's current content lands on the cloud and
    every other device (on or off). Reads the server copy in a transaction,
    MERGES (so a stale device pressing the button cannot roll every other
-   device back to an old version — the exact disaster a blind forced write
-   makes possible), then stamps the merged result with a strictly-newer
-   forceEpoch so all devices adopt exactly it, even mid-typing. Offline the
+   device back to an old version), then stamps the merged result with a
+   strictly-newer forceEpoch so all devices adopt exactly it. Offline the
    transaction fails; the press is remembered and retried when connectivity
    returns. */
-let hardSaveWait=null, hardSaveDoneTimer=null, hardSavePending=false;
+let hardSaveWait=null, hardSaveDoneTimer=null, hardSavePending=false, hardInflight=false, hardSeq=0;
 function hardSave(){
-  if(!db||!currentUser||!cloudRef) return;
+  if(!db||!currentUser||!cloudRef||protoBlocked) return;
   // Wait for the first reconciliation before writing (online only) so a
   // fresh device can't overwrite the real cloud with un-synced stock content.
   if(!cloudReady && navigator.onLine){
     setSyncStatus('saving');
     clearTimeout(hardSaveWait); hardSaveWait=setTimeout(hardSave, 300); return;
   }
+  if(hardInflight) return;
   const btn=$('cloud-save'), done=$('cloud-done');
   everEdited=true; persist();
-  clearTimeout(cloudSaveTimer);                                    // cancel any pending debounced push
+  clearTimeout(cloudSaveTimer); cloudSaveTimer=null;                // cancel any pending debounced push
   if(btn) btn.disabled=true;
   setSyncStatus('saving');
-  let adopt=null, sent=null;
+  const seq=++hardSeq;
+  hardInflight=true;
+  const giveUp=err=>{
+    if(seq!==hardSeq || !hardInflight) return;
+    hardInflight=false; hardSeq++;
+    if(btn) btn.disabled=false;
+    hardSavePending=true; syncError(err);
+    releaseHeld();
+  };
+  const watchdog=setTimeout(()=>giveUp(new Error('hard save timed out')), SYNC_T.pushTimeout);
+  let result=null;
   db.runTransaction(tx=>tx.get(cloudRef).then(snap=>{
-    const remote=snap.exists?parseRemote(snap.data()):null;
-    if(remote){ snapStoreColors(remote); normalizeStoreDocs(remote); observeStore(remote); }
-    const next=remote?mergeStores(store,remote):store;
+    const remote=snap.exists ? parseRemote(snap.data()) : null;
+    if(remote) prepRemote(remote);
+    const sent=cloneStore(store), bases=Object.assign({}, docBases);
+    const next=remote ? mergeStores(sent, remote, bases) : mergeStores(sent, {});
     next.forceEpoch=Math.max(store.forceEpoch||0, (remote&&remote.forceEpoch)||0, Date.now())+1;
-    adopt=next; sent=syncPayload(next);
-    tx.set(cloudRef,{ data: JSON.stringify(next), updated: Date.now() });
+    result={next, sent};
+    tx.set(cloudRef, cloudDoc(next));
   })).then(()=>{
-      serverSeenAt=Date.now(); hardSavePending=false;
-      adoptMerged(adopt);                // pick up anything newer the server had
-      lastSyncedPayload=sent; syncError(null); setSyncStatus('saved');
+      if(seq!==hardSeq) return;
+      clearTimeout(watchdog);
+      hardInflight=false; hardSavePending=false;
+      afterCommit(result.next, result.sent);   // picks up anything newer the server had
+      syncError(null); setSyncStatus('saved');
       if(btn) btn.disabled=false;
       if(done) done.classList.add('show');
       clearTimeout(hardSaveDoneTimer);
       hardSaveDoneTimer=setTimeout(()=>{ if(done) done.classList.remove('show'); closeMenus(); }, 1900);
+      releaseHeld();
+      if(isStoreDirty()) pushCloud();
     })
-    .catch(err=>{ if(btn) btn.disabled=false; hardSavePending=true; syncError(err); });
+    .catch(err=>{ clearTimeout(watchdog); giveUp(err); });
 }
 /* Immediate push — no debounce. For moments when timers are about to freeze
-   (phone backgrounds the tab / page is closing): the 300ms save and 500ms
-   push timers never fire there, so an edit made just before switching apps
-   used to sit only in memory until the tab came back — or die with it.
-   Dirty-gated: an idle tab (e.g. one that just woke from overnight sleep with
-   a stale copy) must never write to the cloud "just in case". */
+   (phone backgrounds the tab / page is closing). Dirty-gated: an idle tab
+   has nothing to say. */
 function flushSync(){
   clearTimeout(saveTimer); persist();
   if(!db||!currentUser||!cloudRef||!cloudReady) return;
   if(!isCloudDirty()) return;
-  clearTimeout(cloudSaveTimer);
   pushCloudNow();
 }
 /* Keep a fresh bearer token cached so the keepalive close-flush below can send
@@ -5092,39 +5593,110 @@ function refreshIdToken(){
   if(!currentUser||!currentUser.getIdToken) return;
   currentUser.getIdToken().then(t=>{ cachedIdToken=t; }).catch(()=>{});
 }
-/* Reliable last-write on close. The SDK's set() above is async and the browser
-   does NOT wait for pending network work when the page unloads (or the OS shuts
-   down), so the final edit could be lost. A fetch(..., {keepalive:true}) IS
-   allowed to outlive the page (up to ~64KB), so we write the current store
-   straight to the Firestore REST API here. Authenticated with the cached token,
-   so it passes the same per-user security rules as the SDK path. Skipped when
-   oversized (keepalive cap) — the SDK path still covers that.
-
-   This is the ONE remaining non-merging write (a single REST PATCH cannot
-   read-merge-write), so it is double-gated: only when there is actually
-   something unsynced to say (dirty), and only when this device has read
-   authoritative server state moments ago (so its store is a superset of the
-   cloud and the blind overwrite is safe). A tab that slept for hours fails
-   the freshness gate and skips — nothing is lost, the edit lives in
-   localStorage and the next wake-up/open merges it in properly. */
-const KEEPALIVE_FRESH_MS=3*60*1000;
+/* Reliable last words on close. The transactional push is async and the
+   browser does not wait for it when the page unloads (or the OS shuts
+   down), but a fetch(..., {keepalive:true}) may outlive the page. A single
+   REST call cannot read-merge-write, so it does NOT touch `data`: it writes
+   this page's unsynced documents, each with its base, into its own entry of
+   the cloud doc's `pending` map. Whoever reads the doc next merges the
+   entry in three-way (foldPending) — it can add these edits but cannot
+   revert anything newer — and uploads the result, clearing the map.
+   (It used to PATCH the whole store over `data`, which could revert newer
+   edits, so it was gated to "talked to the server in the last 3 minutes" —
+   and a device closed after a long sleep lost its last edits instead.) */
 function keepaliveFlush(){
-  if(!currentUser||!cachedIdToken||!navigator.onLine) return;
+  if(!currentUser||!cachedIdToken||!navigator.onLine||protoBlocked) return;
   if(!isCloudDirty()) return;
-  if(Date.now()-serverSeenAt > KEEPALIVE_FRESH_MS) return;
-  const body=JSON.stringify({ fields:{
-    data:{ stringValue: JSON.stringify(store) },
-    updated:{ integerValue: String(Date.now()) },
-  }});
-  if(body.length>60000) return;                       // keepalive body cap (~64KB) — leave margin
+  flushEditor();
+  const docs=store.docs.filter(d=>{ const b=docBases[d.id]; return !b || b.text!==(d.text||'') || b.name!==(d.name||''); });
+  const bases={}; docs.forEach(d=>{ if(docBases[d.id]) bases[d.id]=docBases[d.id]; });
+  const entry={ v:SYNC_PROTO, at:Date.now(), docs, bases, deletedDocs:store.deletedDocs||{},
+                tags:store.tags||[], tagsUpdated:store.tagsUpdated||0, deletedTags:store.deletedTags||{}, forceEpoch:store.forceEpoch||0 };
+  const body=JSON.stringify({ fields:{ pending:{ mapValue:{ fields:{ [PENDING_KEY]:{ stringValue: JSON.stringify(entry) } } } } } });
+  if(body.length>60000) return;                       // keepalive body cap (~64KB) — localStorage still has it
   const url='https://firestore.googleapis.com/v1/projects/'+firebaseConfig.projectId+
     '/databases/(default)/documents/users/'+currentUser.uid+
-    '?updateMask.fieldPaths=data&updateMask.fieldPaths=updated';
+    '?updateMask.fieldPaths=pending.'+PENDING_KEY;
   try{
     fetch(url,{ method:'PATCH', keepalive:true,
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+cachedIdToken },
-      body });
+      body }).catch(()=>{});
   }catch(e){}
+}
+
+/* The cloud was written by a newer build: this one must not write anything
+   (it may not understand what it would merge). Fetch the update and reload
+   at the first safe moment. */
+function protoBlock(){
+  if(protoBlocked) return;
+  protoBlocked=true;
+  setSyncStatus('offline');
+  appUpdateReady=true;
+  checkAppUpdate(true);
+  maybeReloadForUpdate();
+}
+
+/* Wake-up (tab visible again / restored from bfcache): re-read the server
+   BEFORE anything else, re-open a listener that may have died while asleep,
+   and push whatever is still unsynced. */
+let hiddenAt=0;
+function onSyncWake(){
+  checkAppUpdate();
+  if(!currentUser) return;
+  refreshIdToken();
+  if(hiddenAt && Date.now()-hiddenAt>=SYNC_T.resubAfter) resubscribe();
+  refreshFromServer();
+  if(cloudReady && isStoreDirty()) pushCloud();
+}
+/* Heartbeat (every 10s): the server is re-read when it has been silent too
+   long, and an unsynced store is re-pushed even if every timer was lost. */
+function syncHeartbeat(){
+  maybeReloadForUpdate();
+  if(!currentUser||!cloudRef||protoBlocked) return;
+  if(document.visibilityState!=='visible' || !navigator.onLine) return;
+  if(Date.now()-serverSeenAt>SYNC_T.pullEvery) refreshFromServer();
+  if(cloudReady && !pushInflight && !hardInflight && !cloudSaveTimer && !pushRetryTimer && isStoreDirty()) pushCloud();
+  if(Date.now()-swCheckAt>3600e3) checkAppUpdate();
+}
+
+/* ---- app updates ----
+   A device that was asleep for long often keeps running an OLD build (a
+   phone keeps the PWA in memory for weeks; a launch on a slow network gets
+   the cached shell). An old build means old sync logic. The service worker
+   activates a new build as soon as it is fetched (skipWaiting + claim); this
+   asks for it on wake / hourly, and reloads the page onto it when that is
+   invisible to the user: while hidden, or with the window unfocused after
+   30 idle minutes. */
+let swHadController=false, appUpdateReady=false, swCheckAt=0;
+function initAppUpdates(){
+  if(!('serviceWorker' in navigator)) return;
+  swHadController=!!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+    if(!swHadController){ swHadController=true; return; }   // first install claiming the page: same code
+    appUpdateReady=true;
+    maybeReloadForUpdate();
+  });
+}
+function checkAppUpdate(force){
+  if(!('serviceWorker' in navigator)) return;
+  if(!force && Date.now()-swCheckAt<10*60*1000) return;
+  swCheckAt=Date.now();
+  try{ navigator.serviceWorker.getRegistration().then(r=>{ if(r) return r.update(); }).catch(()=>{}); }catch(e){}
+}
+function maybeReloadForUpdate(){
+  if(!appUpdateReady || composing) return;
+  const hidden=document.visibilityState==='hidden', idle=Date.now()-lastEditAt;
+  // visible: only when nobody is at it (window unfocused, 30 min without an
+  // edit) — or after a minute's pause when this build may not sync at all
+  if(!hidden && !(protoBlocked ? idle>60000 : (idle>30*60*1000 && !document.hasFocus()))) return;
+  if(!hidden && document.querySelector('.doc-name-input')) return;   // a rename in progress
+  try{
+    const last=+(sessionStorage.getItem('calcuta.updReload')||0);
+    if(Date.now()-last<60000) return;                                 // never loop
+    sessionStorage.setItem('calcuta.updReload', String(Date.now()));
+  }catch(e){ return; }
+  clearTimeout(saveTimer); persist();
+  location.reload();
 }
 
 /* ================================================================
@@ -5294,7 +5866,7 @@ function boot(){
   input.addEventListener('beforeinput', onBeforeInput);
   input.addEventListener('input', onInput);
   input.addEventListener('compositionstart', ()=>composing=true);
-  input.addEventListener('compositionend', ()=>{ composing=false; onInput(); });
+  input.addEventListener('compositionend', ()=>{ composing=false; onInput(); releaseHeld(); });
   input.addEventListener('keydown', onEditorKeydown);
   input.addEventListener('keyup', e=>{
     if(acOpen() && (e.key==='ArrowUp'||e.key==='ArrowDown')) return;   // popup is navigating, keep it open
@@ -5602,11 +6174,22 @@ function boot(){
   // a tab that slept through edits made elsewhere must reconcile BEFORE it
   // shows anything or writes anything, not wait for the push channel to notice.
   document.addEventListener('visibilitychange', ()=>{
-    if(document.visibilityState==='hidden'){ flushSync(); keepaliveFlush(); }
-    else refreshFromServer();
+    if(document.visibilityState==='hidden'){ hiddenAt=Date.now(); flushSync(); keepaliveFlush(); maybeReloadForUpdate(); }
+    else onSyncWake();
   });
   window.addEventListener('pagehide', ()=>{ flushSync(); keepaliveFlush(); });
-  window.addEventListener('pageshow', ()=>{ refreshFromServer(); });
+  window.addEventListener('pageshow', e=>{ if(e.persisted) hiddenAt=hiddenAt||1; onSyncWake(); });
+  // another tab of the app saved: merge it in now (see integrateLocal), and
+  // hand back anything it lacks so neither tab can overwrite the other
+  window.addEventListener('storage', e=>{
+    if(sharedMode || e.key!==STORE_KEY || e.newValue==null || e.newValue===lastLocalRaw) return;
+    if(composing) return;   // the save after compositionend sees the change (saveLocal) and merges it then
+    lastLocalRaw=e.newValue;
+    if(integrateLocal(e.newValue)) saveLocal();
+    if(cloudReady && isStoreDirty()) pushCloud();
+  });
+  initAppUpdates();
+  setInterval(syncHeartbeat, 10000);
   // desktop window/tab close. Fire the flushes, and if there are still-unsynced
   // changes (never server-acked — offline, blocked, or edited in the last instant)
   // surface the browser's "leave site?" prompt so the user doesn't walk away
@@ -5621,8 +6204,9 @@ function boot(){
   window.addEventListener('online', ()=>{
     setSyncStatus('saved'); refreshIdToken();
     if(hardSavePending){ hardSavePending=false; hardSave(); }
+    resubscribe();
     refreshFromServer();
-    if(cloudReady && isCloudDirty()) pushCloud();
+    if(cloudReady && isStoreDirty()) pushCloud();
   });
   // keep the keepalive token fresh (Firebase ID tokens expire ~1h)
   setInterval(refreshIdToken, 1800000);
@@ -5645,9 +6229,11 @@ window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluate
   __syncTest:{
     inject:(fakeDb,fakeRef,user)=>{ db=fakeDb; cloudRef=fakeRef; currentUser=user; cloudReady=true; cachedIdToken='test-token'; },
     setStore:(s)=>{ store=s; observeStore(store); loadActiveIntoEditor(); },
+    getBases:()=>JSON.parse(JSON.stringify(docBases)), setBases:(b)=>{ docBases=b||{}; },
+    merge3, mapOffset, lcsMatch, PENDING_KEY, checkAppUpdate, appUpdateReady:()=>appUpdateReady,
     setSynced:(payload)=>{ lastSyncedPayload=payload; everEdited=true; },
     setServerSeenAt:(t)=>{ serverSeenAt=t; },
-    state:()=>({ serverSeenAt, cloudReady, lastSyncedPayload, hardSavePending, pushInflight }),
+    state:()=>({ serverSeenAt, cloudReady, lastSyncedPayload, hardSavePending, pushInflight, hardInflight, serverPullInflight, protoBlocked, held:heldRemotes.length }),
     pushCloudNow, flushSync, keepaliveFlush, hardSave, refreshFromServer, reconcileRemote, isCloudDirty, parseRemote,
   }};
 

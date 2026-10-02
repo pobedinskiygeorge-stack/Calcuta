@@ -1,0 +1,17 @@
+// Firestore security rules for Calcuta (paste into Firebase console →
+// Firestore Database → Rules). Each user can only touch their own document.
+// Writes must carry the sync protocol version (proto >= 2): builds from
+// before the three-way merge sync can no longer write, so a device still
+// running a stale cached build cannot drop other devices' close-flush
+// entries (`pending`) or overwrite newer data. Deploy after every device has
+// opened the updated app once.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      allow create, update: if request.auth != null && request.auth.uid == uid
+                            && request.resource.data.get('proto', 0) >= 2;
+    }
+  }
+}
