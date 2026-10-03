@@ -70,6 +70,7 @@ class Device {
     await ctx.route(EMU + '/**', r => {
       if (!this.online) return r.abort();
       if (this.hangCommit && /:commit\b/.test(r.request().url())) return new Promise(() => {});
+      if (this.hangListen && /Listen\/channel/.test(r.request().url())) return new Promise(() => {});
       return r.continue();
     });
     // the app's keepalive close-flush goes to the production REST host: send it to the emulator
@@ -239,6 +240,33 @@ const scenarios = {
     return { ok: got, detail: 'caught up after ' + (Date.now() - t0) + 'ms' };
   },
 
+  async 'real SDK: rules refuse access for a while (listener dies with an error), then allow — the device recovers'(w) {
+    const { A, B } = await pair(w);
+    await setRules("rules_version = '2';\nservice cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if false; } } }");
+    try {
+      await sleep(1500);
+      await B.edit('stock-tasks', mark(BASE, 2, ' (B while refused)'));
+      await sleep(5000);
+      const refused = await B.page.evaluate(() => document.getElementById('sync-status').title);
+      await setRules(OPEN_RULES);
+      await A.edit('stock-tasks', mark(BASE, 0, ' (A after)'));
+      const ok = await w.converge([A, B], 90000);
+      const s = await serverText('stock-tasks');
+      return { ok: ok && s === 'строка 1 (A after)\nстрока 2\nстрока 3 (B while refused)', detail: 'status while refused: ' + JSON.stringify(refused) + ' server: ' + JSON.stringify(s) };
+    } finally { await setRules(OPEN_RULES); }
+  },
+
+  async 'real SDK: Listen channel hangs (requests never answered), then recovers — device catches up'(w) {
+    const { A, B } = await pair(w);
+    B.hangListen = true;
+    await A.edit('stock-tasks', mark(BASE, 0, ' (A while B wedged)'));
+    await sleep(5000);
+    B.hangListen = false;
+    const t0 = Date.now(); let got = false;
+    while (Date.now() - t0 < 120000) { if (has(await B.text('stock-tasks'), '(A while B wedged)')) { got = true; break; } await sleep(1000); }
+    return { ok: got, detail: 'caught up: ' + got + ' after ' + (Date.now() - t0) + 'ms' };
+  },
+
   async 'real SDK: recommended rules accept this build and refuse a build without proto'(w) {
     const r = await setRules("rules_version = '2';\nservice cloud.firestore { match /databases/{database}/documents { match /users/{uid} {\n" +
       "  allow read, delete: if true;\n  allow create, update: if request.resource.data.get('proto', 0) >= 2; } } }");
@@ -259,6 +287,38 @@ const scenarios = {
       return { ok: okNew && okOld, detail: 'new build wrote: ' + okNew + '; ' + detailOld };
     } finally { await setRules(OPEN_RULES); }
   },
+};
+
+scenarios['real SDK fuzz: 3 devices, random offline / power-off / close + edits — nothing lost, all converge'] = async w => {
+  const N = 5;
+  const A = await w.device('A'); await sleep(2500);
+  await A.edit('stock-tasks', Array.from({ length: N }, (_, i) => 'L' + i).join('\n')); await sleep(2500);
+  const B = await w.device('B'); const C = await w.device('C'); await sleep(3000);
+  if (!await w.converge([A, B, C], 30000)) throw new Error('setup did not converge');
+  const devs = [A, B, C], state = new Map(devs.map(d => [d, 'up'])), lastEdit = new Map(), tokens = [];
+  let seed = +(process.env.FUZZ_SEED || 31337); const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const ri = n => Math.floor(rnd() * n);
+  for (let step = 0; step < 45; step++) {
+    const d = devs[ri(3)], st = state.get(d), act = ri(9);
+    if (st === 'off') { if (act < 4) { await d.boot(); state.set(d, 'up'); await sleep(1500); } continue; }
+    if (act <= 4) {
+      const t = 'T' + step + d.name; tokens.push(t);
+      await d.page.evaluate(([w, i]) => { const K = window.__calcuta; if (K.getStore().activeId !== 'stock-tasks') K.setActive('stock-tasks');
+        const el = document.getElementById('input'); el.focus(); const L = el.value.split('\n'); const k = i % L.length; L[k] += ' ' + w; el.value = L.join('\n');
+        el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: 'x', bubbles: true })); }, [t, ri(N)]);
+      lastEdit.set(d, Date.now());
+    } else if (act === 5) { if (st === 'up') { await d.goOffline(); state.set(d, 'offline'); } else { await d.goOnline(); state.set(d, 'up'); } }
+    else if (act === 6) { const since = Date.now() - (lastEdit.get(d) || 0); if (since < 400) await sleep(400 - since); await d.powerOff(); state.set(d, 'off'); }
+    else if (act === 7) { if (st === 'up') { await d.quit(); state.set(d, 'off'); } }
+    else await sleep(500 + ri(1500));
+    await sleep(200 + ri(600));
+  }
+  for (const d of devs) { const st = state.get(d); if (st === 'off') await d.boot(); else if (st === 'offline') await d.goOnline(); }
+  const ok = await w.converge(devs, 90000);
+  const s = (await serverText('stock-tasks')) || '';
+  const lost = tokens.filter(t => !s.split(/\s+/).includes(t));
+  return { ok: ok && !lost.length && s.split('\n').length === N,
+           detail: 'seed=' + (process.env.FUZZ_SEED || 31337) + ' converged=' + ok + ' lost=' + JSON.stringify(lost) + ' server: ' + JSON.stringify(s) };
 };
 
 (async () => {
