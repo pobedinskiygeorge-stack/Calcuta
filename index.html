@@ -2375,7 +2375,14 @@ function saveLocal(){
     const raw=localStorage.getItem(STORE_KEY);
     if(raw!==null && lastLocalRaw!==null && raw!==lastLocalRaw){ lastLocalRaw=raw; integrateLocal(raw); }
     const out=JSON.stringify(Object.assign({}, store, {_bases:docBases, _basesUid:docBasesUid}));
-    localStorage.setItem(STORE_KEY, out); lastLocalRaw=out;
+    try{ localStorage.setItem(STORE_KEY, out); lastLocalRaw=out; }
+    catch(e){
+      // over the quota with the bases (they roughly double the blob): the
+      // documents themselves must still be saved — drop the bases (the next
+      // sync of a doc falls back to last-writer-wins) rather than everything
+      const lean=JSON.stringify(Object.assign({}, store, {_bases:{}, _basesUid:docBasesUid}));
+      localStorage.setItem(STORE_KEY, lean); lastLocalRaw=lean;
+    }
   }catch(e){}
 }
 function persist(){
@@ -4492,9 +4499,9 @@ function fallbackCopy(t){
   if(prev&&prev.focus){ prev.focus({preventScroll:true}); if(ps) try{ prev.setSelectionRange(ps[0],ps[1]); }catch(e){} }
 }
 let toastTimer=null;
-function showToast(msg){
+function showToast(msg, ms){
   toast.textContent=msg; toast.classList.add('show');
-  clearTimeout(toastTimer); toastTimer=setTimeout(()=>toast.classList.remove('show'),1400);
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>toast.classList.remove('show'), ms||1400);
 }
 
 /* ---------- resizable results column ---------- */
@@ -5021,6 +5028,7 @@ function resolveChunk(O, A, B, aNewer, bWins){
     }
   }
   if(bWins) return B;
+  mergeClashes++;
   const known=new Set(newer.concat(O));
   const extra=older.filter(l=>!known.has(l));
   if(window.__calcutaMergeLog) window.__calcutaMergeLog({conflict:{O, A, B, aNewer}});   // test hook
@@ -5233,6 +5241,14 @@ function cloudDoc(s){
   return { data: JSON.stringify(data), updated: Date.now(), proto: SYNC_PROTO };
 }
 function cloneStore(s){ return JSON.parse(JSON.stringify(s)); }
+/* Real clashes (one line rewritten differently on two devices) keep both
+   versions; say so once, so a doubled line does not go unnoticed. */
+let mergeClashes=0, reportedClashes=0;
+function reportClashes(){
+  if(mergeClashes===reportedClashes) return;
+  reportedClashes=mergeClashes;
+  showToast('Одну строку изменили на двух устройствах — сохранены обе версии', 4000);
+}
 /* Firestore caps a document at 1 MiB (UTF-8 bytes, all fields). Keep a
    margin for the other fields and the close-flush entries. */
 const CLOUD_MAX_BYTES=1000000;
@@ -5426,6 +5442,7 @@ function reconcileRemote(remote){
   neverSynced=false;
   if(remote.__pending) diverged=true;       // fold close-flush entries in for good
   if(!diverged) lastSyncedPayload=syncPayload(store);   // cloud already has everything → clean
+  reportClashes();
   return diverged;
 }
 
@@ -5653,6 +5670,7 @@ function afterCommit(next, sent){
   setBases(next);
   saveLocal();
   lastSyncedPayload=syncPayload(next);
+  reportClashes();
 }
 function pushCloud(){
   if(!db||!currentUser||!cloudRef||!cloudReady||protoBlocked) return;

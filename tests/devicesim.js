@@ -96,10 +96,22 @@ const FAKE_SDK = String.raw`(function(){
 })();`;
 
 class Server {
-  constructor() { this.doc = null; this.version = 0; this.devices = new Set(); this.writes = []; }
+  constructor() { this.doc = null; this.version = 0; this.devices = new Set(); this.writes = []; this.violations = []; }
   rec() { return { doc: clone(this.doc), version: this.version }; }
+  // The invariant the clients' stale-copy guard relies on: when a document's
+  // content changes on the server, its stamp never goes backwards.
+  checkMonotonic(prev, next, who) {
+    const parse = d => { try { return d && d.data ? JSON.parse(d.data) : null; } catch (e) { return null; } };
+    const a = parse(prev), b = parse(next); if (!a || !b) return;
+    for (const nd of b.docs || []) {
+      const od = (a.docs || []).find(x => x.id === nd.id); if (!od) continue;
+      if ((od.text !== nd.text || od.name !== nd.name) && (nd.updated || 0) < (od.updated || 0))
+        this.violations.push(who + ': ' + nd.id + ' changed with an older stamp ' + nd.updated + ' < ' + od.updated);
+    }
+  }
   commit(version, doc, who) {
     if (version !== this.version) return false;
+    this.checkMonotonic(this.doc, doc, who);
     this.doc = clone(doc); this.version++; this.writes.push({ who, via: 'tx', version: this.version });
     this.broadcast();
     return true;

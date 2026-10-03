@@ -419,6 +419,22 @@ const scenarios = {
     return { ok: ok && s === 'строка 1 (A)\nстрока 3 (B)\nновая (A)', detail: 'server: ' + JSON.stringify(s) };
   },
 
+  async 'the same line rewritten differently on two devices: both versions kept, and the user is told'(sim) {
+    const { A, B } = await pair(sim);
+    await B.goOffline();
+    await B.edit('stock-tasks', 'строка 1\nвторая строка по версии B\nстрока 3');
+    await sleep(600);
+    await A.edit('stock-tasks', 'строка 1\nвторая строка по-другому у A\nстрока 3');
+    await sleep(1500);
+    await B.goOnline();
+    await sleep(1200);
+    const toast = await B.eval(() => { const t = document.querySelector('.toast.show, #toast.show'); return t ? t.textContent : ''; });
+    const ok = await sim.converge([A, B], 20000);
+    const s = sim.server.text('stock-tasks');
+    return { ok: ok && has(s, 'по версии B', 'по-другому у A', 'строка 1', 'строка 3') && s.split('\n').length === 4 && /двух устройствах/.test(toast),
+             detail: 'server: ' + JSON.stringify(s) + ' toast: ' + JSON.stringify(toast) };
+  },
+
   async 'deleted on one device while edited later offline on another: the edit is not lost'(sim) {
     const { A, B } = await pair(sim);
     const w = await A.createDoc('W', 'w text');
@@ -746,6 +762,7 @@ scenarios['fuzz: documents created/renamed/edited across 3 devices — every doc
     let r;
     try { r = await fn(sim); }
     catch (e) { r = { ok: false, detail: 'threw: ' + (e && e.message) }; }
+    if (sim.server.violations.length) { r.ok = false; r.detail += ' | server stamp went backwards: ' + sim.server.violations.slice(0, 3).join('; '); }
     const errs = sim.devices.flatMap(d => d.errors);
     if (errs.length) { r.ok = false; r.detail += ' | page errors: ' + errs.join('; '); }
     console.log((r.ok ? '  ok  ' : '  FAIL') + ' ' + name + (r.ok ? '' : '\n         ' + r.detail));

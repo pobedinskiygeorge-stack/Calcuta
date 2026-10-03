@@ -233,6 +233,21 @@ const CASES = [
   check(live.merged && live.at === 'строка 150' && live.before === live.after,
         'live merge: caret stays on the same text AND at the same height on screen when lines are added above', JSON.stringify(live));
 
+  // ---- localStorage quota: the bases must never cost the documents themselves ----
+  const quota = await page.evaluate(() => {
+    const K = window.__calcuta, S = K.__syncTest;
+    const big = 'x'.repeat(2800000);                       // with its base: over the ~5M-char quota
+    const d = K.getStore().docs.find(x => x.id === 'stock-personal');
+    d.text = big; d.updated = K.stamp();
+    S.setBases({ 'stock-personal': { text: big, name: 'Личное', updated: 1 } });
+    S.flushSync();
+    const o = JSON.parse(localStorage.getItem('calcuta.v2') || 'null');
+    const len = o ? o.docs.find(x => x.id === 'stock-personal').text.length : 0;
+    d.text = ''; d.updated = K.stamp(); S.setBases({}); S.flushSync();
+    return len;
+  });
+  check(quota === 2800000, 'over the localStorage quota with the bases: the documents are still saved (bases dropped)', 'saved length ' + quota);
+
   await browser.close();
   console.log(fails ? `\n${fails} of ${checks} merge checks FAILED` : `\nALL ${checks} MERGE CHECKS PASSED`);
   process.exit(fails ? 1 : 0);
