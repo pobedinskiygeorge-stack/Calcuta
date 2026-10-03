@@ -4723,6 +4723,7 @@ function onAuthChanged(user){
     // name) is gone. A stray reference to it here used to throw BEFORE
     // subscribeCloud(), silently killing cross-device sync after sign-in.
     setSyncStatus(navigator.onLine?'saved':'offline');
+    requestPersistentStorage();
     subscribeCloud();
     refreshIdToken();   // cache a bearer token for the keepalive close-flush (see below)
   }else{
@@ -4742,6 +4743,18 @@ function onAuthChanged(user){
    1 MB document limit, or rules that refuse this account, will never
    succeed by waiting — say so instead of promising a later save. */
 let syncProblem=null;
+/* Ask the browser not to evict this site's storage (Chrome may clear it
+   under disk pressure; it holds edits that have not reached the cloud yet
+   while a device is offline). Chromium and WebKit decide silently; Firefox
+   would pop a permission prompt out of nowhere, so it is not asked there. */
+let persistAsked=false;
+function requestPersistentStorage(){
+  if(persistAsked) return; persistAsked=true;
+  try{
+    if(!navigator.storage || !navigator.storage.persist || /Firefox\//.test(navigator.userAgent)) return;
+    navigator.storage.persisted().then(p=>{ if(!p) return navigator.storage.persist(); }).catch(()=>{});
+  }catch(e){}
+}
 function syncError(err){
   if(!err){ syncProblem=null; return; }
   console.error('cloud sync error', err);
