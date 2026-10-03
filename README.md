@@ -178,4 +178,4 @@ service cloud.firestore {
 }
 ```
 
-Регрессия закреплена тестами `tests/devicetest.js` (симулятор нескольких устройств), `tests/mergetest.js` (движок слияния) и `tests/staletest.js`.
+Регрессия закреплена тестами `tests/devicetest.js` (симулятор нескольких устройств), `tests/realsdk.js` (то же на настоящем Firestore SDK против эмулятора Firestore), `tests/mergetest.js` (движок слияния) и `tests/staletest.js`.
