@@ -450,10 +450,13 @@ button{font-family:inherit;color:inherit}
    line (.hl-line is one source line), the textarea with `each-line` (indent
    restarts after every newline). Both or neither: if the textarea ignored it,
    the layers would wrap differently and the native caret would drift - so
-   html.hang is set only after detectHang() saw a real textarea do it (WebKit /
-   Safari and Firefox do; Chrome, even with each-line support, applies it to a
-   textarea's first line only). */
+   html.hang is set only after chooseEditSurface() saw the real editing element
+   do it: WebKit/Safari's and Firefox's textarea, or - in Chrome, whose textarea
+   applies it to the first line only - the contenteditable twin. */
 html.hang .hl-line{padding-left:var(--hang);text-indent:calc(-1 * var(--hang))}
+/* The contenteditable twin (Chrome, see chooseEditSurface): editable elements
+   get line-break:after-white-space from the browser, the painted <pre> doesn't */
+html.ce #input{line-break:auto;cursor:text;-webkit-tap-highlight-color:transparent}
 html.hang #input{padding-left:calc(var(--pad-x) + var(--hang));text-indent:calc(-1 * var(--hang)) each-line}
 
 /* highlight is the in-flow layer that gives #stack its height */
@@ -793,7 +796,7 @@ html.hang #input{padding-left:calc(var(--pad-x) + var(--hang));text-indent:calc(
       <button class="icon-btn" id="find-close" title="закрыть (Esc)">✕</button>
     </div>
     <div id="editor">
-      <div id="stack">
+      <div id="stack" translate="no">
         <div id="searchlayer"></div>
         <div id="sectionlayer"></div>
         <div id="sellayer"></div>
@@ -1983,6 +1986,224 @@ function hexToRgba(hex, alpha){
    [EDITOR] — DOM wiring, layers, interaction
    ================================================================ */
 const $=id=>document.getElementById(id);
+/* ---------- the editing surface: a <textarea>, or a contenteditable twin ----------
+   The caret the user sees is the browser's own, drawn in an invisible editing
+   element that lies pixel-for-pixel under the painted #highlight. Wrapped rows
+   keep the section indent (the hanging indent, html.hang) only if that element
+   indents every line the way the per-line painted rows do (`text-indent:
+   each-line`). WebKit/Safari's and Firefox's <textarea> do. Chrome's applies
+   it to the first line only (still in Chrome 155), while a Chrome <div>
+   handles it fine. So:
+   - the textarea indents every line  -> textarea, hanging indent on;
+   - else a contenteditable div does   -> a contenteditable="plaintext-only"
+     div wearing the textarea's API (value, selectionStart/End,
+     setSelectionRange, readOnly, ...), so the rest of the editor is unchanged;
+   - else (older browsers)             -> textarea, no hanging indent.
+   localStorage 'calcuta.editor' = 'textarea' | 'contenteditable' forces one
+   (an escape hatch, and how the tests drive both). */
+function hangProbe(el){
+  // width 10ch, hanging 3ch: "a" | 12 x's (fit the 13ch first row only if the
+  // indent applies after the newline) | 24 y's (13 + 10 + 1: the soft-wrapped
+  // rows must NOT be pulled back). Right = 5 rows.
+  const css='position:absolute;left:-9999px;top:0;visibility:hidden;margin:0;border:0;box-sizing:content-box;'+
+    'font:10px/10px monospace;letter-spacing:0;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;line-break:auto;'+
+    'width:10ch;padding:0 0 0 3ch;text-indent:-3ch each-line;overflow:hidden;resize:none';
+  const txt='a\n'+'x'.repeat(12)+'\n'+'y'.repeat(24);
+  try{
+    const ta=el.tagName==='TEXTAREA';
+    el.style.cssText=css+(ta?';height:1px':'');
+    if(ta) el.value=txt; else el.textContent=txt;
+    document.body.appendChild(el);
+    return Math.round((ta ? el.scrollHeight : el.offsetHeight)/10)===5;
+  }catch(e){ return false; }
+  finally{ el.remove(); }
+}
+function chooseEditSurface(){
+  let force=''; try{ force=localStorage.getItem('calcuta.editor')||''; }catch(e){}
+  const each=!!(window.CSS && CSS.supports && CSS.supports('text-indent','1px each-line'));
+  let ceOk=false;
+  try{ const d=document.createElement('div'); d.contentEditable='plaintext-only'; ceOk=d.contentEditable==='plaintext-only'; }catch(e){}
+  const taHangs=()=>each && hangProbe(document.createElement('textarea'));
+  const ceHangs=()=>{ if(!each || !ceOk) return false; const d=document.createElement('div'); d.contentEditable='plaintext-only'; return hangProbe(d); };
+  // the twin is only ever chosen on its own for Chromium-based browsers: it is
+  // built and tested against Chrome's editing; elsewhere a textarea that can't
+  // do the hanging indent simply goes without it
+  const blink=/\b(?:Chrome|Chromium|HeadlessChrome)\/\d/.test(navigator.userAgent||'');
+  if(force==='textarea') return {ce:false, hang:taHangs()};
+  if(force==='contenteditable' && ceOk) return {ce:true, hang:ceHangs()};
+  if(taHangs()) return {ce:false, hang:true};
+  if(blink && ceHangs()) return {ce:true, hang:true};
+  return {ce:false, hang:false};
+}
+/* A contenteditable="plaintext-only" <div> standing in for the <textarea>.
+   The text lives in ONE text node. Its data is the value, plus one extra
+   trailing "\n" when the value is empty or ends with a newline - that is how
+   an empty last line renders (and exactly what Chrome itself keeps there:
+   typing Enter at the end yields "...\n\n", deleting back to it "...\n<br>").
+   Browser edits (typing, Enter, Backspace, drag-drop) may split the node or
+   leave a <br>; every 'input' outside an IME composition folds the DOM back
+   into that one node, keeping the caret. Selection is kept in offsets while
+   the div is not focused (setting a DOM selection inside a contenteditable
+   would focus it, which a textarea's setSelectionRange never does). */
+function makeEditable(ta){
+  const el=document.createElement('div');
+  for(const a of ['id','class','spellcheck','autocapitalize']) if(ta.hasAttribute(a)) el.setAttribute(a, ta.getAttribute(a));
+  el.setAttribute('role','textbox'); el.setAttribute('aria-multiline','true');
+  // nothing but the user may rewrite this text: page translation and writing
+  // assistants edit contenteditable DOM in place (a textarea is off-limits to
+  // them), and whatever they wrote would be saved and synced as the document
+  el.setAttribute('translate','no'); el.classList.add('notranslate');
+  el.setAttribute('data-gramm','false'); el.setAttribute('data-gramm_editor','false'); el.setAttribute('data-enable-grammarly','false');
+  el.contentEditable='plaintext-only';
+  el.tabIndex=0;                                      // stays focusable when readOnly turns editing off, like a textarea
+  el.textContent='\n';
+  let sS=0, sE=0, sDir='none', composing=false, pointerAt=0, readOnly=false;
+  const domFor=v=>(v===''||v.endsWith('\n')) ? v+'\n' : v;
+  const focused=()=>document.activeElement===el;
+  function single(){ const f=el.firstChild; return f && f.nodeType===3 && !f.nextSibling ? f : null; }
+  function canonical(){
+    const t=single(); if(!t) return false;
+    const d=t.data;
+    return d!=='' && (!d.endsWith('\n') || d==='\n' || d.endsWith('\n\n'));
+  }
+  // Non-canonical DOM, read in document order: text nodes, <br> = "\n", and a
+  // "\n" where a block (<div>/<p>) starts after text that didn't end a line.
+  function segments(){
+    const segs=[]; let pos=0, last='\n';
+    (function walk(node){
+      for(let c=node.firstChild;c;c=c.nextSibling){
+        if(c.nodeType===3){ if(c.data){ segs.push({n:c, s:pos, len:c.data.length}); pos+=c.data.length; last=c.data[c.data.length-1]; } }
+        else if(c.nodeName==='BR'){ segs.push({n:c, s:pos, len:1, nl:true}); pos++; last='\n'; }
+        else if(c.nodeType===1){
+          if(/^(DIV|P|LI|PRE|BLOCKQUOTE|H[1-6])$/.test(c.nodeName) && pos>0 && last!=='\n'){ segs.push({n:c, s:pos, len:1, nl:true, block:true}); pos++; last='\n'; }
+          walk(c);
+        }
+      }
+    })(el);
+    return segs;
+  }
+  function domText(segs){
+    const t=single(); if(t) return t.data;
+    let d=''; for(const g of segs||segments()) d+= g.nl ? '\n' : g.n.data;
+    return d;
+  }
+  function getValue(segs){ const d=domText(segs); return d.endsWith('\n') ? d.slice(0,-1) : d; }
+  const FOLLOWS=Node.DOCUMENT_POSITION_FOLLOWING;
+  function pointToOffset(node, off, segs){
+    const t=single();
+    if(t){ if(node===t) return off; if(node===el) return off>0 ? t.data.length : 0; }
+    segs=segs||segments();
+    if(node.nodeType===3){ const g=segs.find(g=>g.n===node); if(g) return g.s+Math.min(off,g.len); }
+    const ref=node.nodeType===3 ? node : (node.childNodes[off]||null);
+    for(const g of segs){
+      if(ref ? (g.n===ref || ref.contains(g.n) || (ref.compareDocumentPosition(g.n)&FOLLOWS))
+             : ((node.compareDocumentPosition(g.n)&FOLLOWS) && !node.contains(g.n))) return g.s;
+    }
+    const z=segs[segs.length-1]; return z ? z.s+z.len : 0;
+  }
+  function offsetToPoint(o){
+    const t=single(); if(t) return [t, Math.min(o, t.data.length)];
+    for(const g of segments()){
+      if(g.nl){ if(o<=g.s) return [g.n.parentNode, [...g.n.parentNode.childNodes].indexOf(g.n)]; continue; }
+      if(o<=g.s+g.len) return [g.n, o-g.s];
+    }
+    return [el, el.childNodes.length];
+  }
+  function readDomSel(){
+    const sel=document.getSelection(); if(!sel || !sel.rangeCount) return null;
+    const a=sel.anchorNode, f=sel.focusNode;
+    if(!a || !f || !el.contains(a) || !el.contains(f)) return null;
+    const segs=single() ? null : segments(), len=getValue(segs).length;
+    const ao=Math.min(pointToOffset(a, sel.anchorOffset, segs), len), fo=Math.min(pointToOffset(f, sel.focusOffset, segs), len);
+    return ao<=fo ? [ao, fo, ao===fo ? 'none' : 'forward'] : [fo, ao, 'backward'];
+  }
+  function applySel(){
+    const sel=document.getSelection(); if(!sel) return;
+    const [an,ao]=offsetToPoint(sDir==='backward' ? sE : sS), [fn,fo]=offsetToPoint(sDir==='backward' ? sS : sE);
+    if(sel.anchorNode===an && sel.anchorOffset===ao && sel.focusNode===fn && sel.focusOffset===fo) return;
+    try{ sel.setBaseAndExtent(an, ao, fn, fo); }catch(e){}
+  }
+  function syncSel(){ if(focused()){ const r=readDomSel(); if(r){ sS=r[0]; sE=r[1]; sDir=r[2]; } } }
+  // A textarea forgets the column ArrowUp/ArrowDown aim for once the text
+  // changes; a contenteditable keeps it, so after Enter the next ArrowDown
+  // jumped to where the caret had been rows ago. Re-placing the same
+  // selection (it must actually go away first) makes Chrome forget it too.
+  function forgetGoalColumn(){
+    const sel=document.getSelection(); if(!sel || !sel.rangeCount || !focused()) return;
+    const a=sel.anchorNode, ao=sel.anchorOffset, f=sel.focusNode, fo=sel.focusOffset;
+    if(!el.contains(a) || !el.contains(f)) return;
+    sel.removeAllRanges();
+    try{ sel.setBaseAndExtent(a, ao, f, fo); }catch(e){}
+  }
+  // Fold whatever the browser left into the one canonical text node.
+  function normalizeDom(){
+    if(composing || canonical()) return;
+    const hadFocus=focused(); if(hadFocus) syncSel();
+    const v=getValue();
+    if([...el.childNodes].every(c=>c.nodeType===3)){
+      el.normalize();                                   // merges text nodes; live ranges (the caret) follow
+      const t=single();
+      if(t){ const want=domFor(v); if(t.data!==want){ if(t.data.length<want.length && want.startsWith(t.data)) t.appendData(want.slice(t.data.length)); else t.data=want; } }
+      else el.textContent=domFor(v);
+    } else el.textContent=domFor(v);
+    const len=v.length; sS=Math.min(sS,len); sE=Math.min(sE,len);
+    if(hadFocus) applySel();
+  }
+  const clamp=(x,len)=>Math.max(0, Math.min(len, Math.floor(+x)||0));
+  Object.defineProperties(el, {
+    value:{ configurable:true,
+      get(){ return getValue(); },
+      set(v){
+        v=String(v==null ? '' : v).replace(/\r\n?/g,'\n');
+        syncSel();                                          // a caret move whose selectionchange hasn't fired yet
+        const old=getValue(), want=domFor(v), t=single();
+        if(v===old && t && t.data===want) return;
+        if(t){ if(t.data!==want) t.data=want; } else el.textContent=want;
+        if(v!==old){ sS=sE=v.length; sDir='none'; }        // a textarea moves its caret to the end on a new value
+        if(focused()){ applySel(); forgetGoalColumn(); }
+      } },
+    selectionStart:{ configurable:true, get(){ syncSel(); return Math.min(sS, getValue().length); },
+      set(x){ syncSel(); el.setSelectionRange(x, Math.max(x, sE), sDir); } },
+    selectionEnd:{ configurable:true, get(){ syncSel(); return Math.min(sE, getValue().length); },
+      set(x){ syncSel(); el.setSelectionRange(Math.min(sS, x), x, sDir); } },
+    selectionDirection:{ configurable:true, get(){ syncSel(); return sDir; } },
+    setSelectionRange:{ configurable:true, value(s, e, dir){
+      const len=getValue().length; s=clamp(s,len); e=clamp(e,len); if(e<s) s=e;
+      sS=s; sE=e; sDir=(dir==='forward'||dir==='backward') ? dir : 'none';
+      if(focused()) applySel();
+    } },
+    select:{ configurable:true, value(){ el.setSelectionRange(0, getValue().length); } },
+    readOnly:{ configurable:true, get(){ return readOnly; },
+      set(v){ readOnly=!!v; el.contentEditable=readOnly ? 'false' : 'plaintext-only'; } },
+    // focus() puts the remembered selection back, like a textarea; a click or
+    // tap places its own caret (see 'focus' below)
+    focus:{ configurable:true, value(opts){ HTMLElement.prototype.focus.call(el, opts); if(focused()) applySel(); } },
+  });
+  el.addEventListener('compositionstart', ()=>{ composing=true; });
+  el.addEventListener('compositionend', ()=>{ composing=false; normalizeDom(); forgetGoalColumn(); });
+  el.addEventListener('input', e=>{ if(!e.isComposing && !composing){ normalizeDom(); forgetGoalColumn(); } });
+  document.addEventListener('selectionchange', syncSel);
+  const pointer=()=>{ pointerAt=Date.now(); };
+  el.addEventListener('mousedown', pointer, true);
+  el.addEventListener('touchstart', pointer, {capture:true, passive:true});
+  el.addEventListener('focus', ()=>{ if(Date.now()-pointerAt>1000) applySel(); });
+  return el;
+}
+const EDIT=chooseEditSurface();
+if(EDIT.ce) $('input').replaceWith(makeEditable($('input')));
+const HANG=EDIT.hang;
+document.documentElement.classList.toggle('hang', HANG);
+document.documentElement.classList.toggle('ce', EDIT.ce);
+/* Insert text at the selection like the browser's own insertText (one undo-
+   able edit + an 'input' event). On the contenteditable twin execCommand
+   would turn every "\n" into a <div>, so it splices the value instead. */
+function editorInsertText(t){
+  if(!EDIT.ce){ document.execCommand('insertText', false, t); return; }
+  const v=input.value, s=input.selectionStart, e=input.selectionEnd;
+  input.value=v.slice(0,s)+t+v.slice(e);
+  input.setSelectionRange(s+t.length, s+t.length);
+  input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:t}));
+}
 const input=$('input'), highlight=$('highlight'),
       results=$('results'), hotspots=$('hotspots'),
       stack=$('stack'), editor=$('editor'),
@@ -3570,6 +3791,9 @@ function pushHistory(st){
   redoStack.length=0;
 }
 function onBeforeInput(e){
+  // Edit menu / shake-to-undo: the app's own history is the only real one
+  // (the browser's is broken by every programmatic edit)
+  if(e.inputType==='historyUndo' || e.inputType==='historyRedo'){ e.preventDefault(); if(e.inputType==='historyUndo') doUndo(); else doRedo(); return; }
   if(suppressHistory) return;
   const boundary = !undoTimer || (e.inputType && e.inputType!==lastInputType);
   if(boundary) pushHistory(histState());          // snapshot pre-change state at burst boundaries
@@ -4383,12 +4607,12 @@ function onPaste(e){
   // atomic PILL entity (SENT + number) rather than loose text — it still
   // reads as a number for math, but edits/deletes as one unit and is outlined.
   if(lastCopiedResult && Date.now()-lastCopiedResult.at < 120000 && txt.trim()===lastCopiedResult.v){
-    document.execCommand('insertText', false, SENT+lastCopiedResult.v);
+    editorInsertText(SENT+lastCopiedResult.v);
     return;
   }
   const normalized=normalizePasted(txt);
   pasteInfo={start:input.selectionStart};
-  try{ document.execCommand('insertText',false,normalized); } finally{ pasteInfo=null; }
+  try{ editorInsertText(normalized); } finally{ pasteInfo=null; }
 }
 /* Pasted text is normalized line-by-line, but any URL run within a line is
    passed through untouched: normalizeNumberRun() below happily inserts a
@@ -6003,31 +6227,7 @@ async function shareLink(){
 /* ================================================================
    [BOOT]
    ================================================================ */
-/* Does this browser's <textarea> indent every line (`text-indent: each-line`),
-   exactly like a <div>? Probe: width 10ch, hanging 3ch. "a" | 12 x's (fit the
-   13ch first row only if the indent applies after the newline) | 24 y's (13 +
-   10 + 1: the soft-wrapped rows must NOT be pulled back). Right = 5 rows, in
-   both elements. Measured once at boot, before anything is laid out. */
-function detectHang(){
-  try{
-    if(!(window.CSS && CSS.supports && CSS.supports('text-indent','1px each-line'))) return false;
-    const css='position:absolute;left:-9999px;top:0;visibility:hidden;margin:0;border:0;box-sizing:content-box;'+
-      'font:10px/10px monospace;letter-spacing:0;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;'+
-      'width:10ch;padding:0 0 0 3ch;text-indent:-3ch each-line;overflow:hidden;resize:none';
-    const txt='a\n'+'x'.repeat(12)+'\n'+'y'.repeat(24);
-    const ta=document.createElement('textarea'), dv=document.createElement('div');
-    ta.style.cssText=css+';height:1px'; dv.style.cssText=css; ta.value=txt; dv.textContent=txt;
-    document.body.append(ta, dv);
-    const rows=[ta.scrollHeight, dv.offsetHeight].map(h=>Math.round(h/10));
-    ta.remove(); dv.remove();
-    return rows[0]===5 && rows[1]===5;
-  }catch(e){ return false; }
-}
-let HANG=false;
-
 function boot(){
-  HANG=detectHang();
-  document.documentElement.classList.toggle('hang', HANG);
   measureChar();
   computeCharsPerLine();
   load();
@@ -6419,7 +6619,7 @@ window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluate
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
   curCmdAt, lineCurCmd, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
-  offsetToLineCol, dateAtIdx, hang:()=>HANG,
+  offsetToLineCol, dateAtIdx, hang:()=>HANG, editSurface:()=>EDIT.ce ? 'contenteditable' : 'textarea',
   caretCell:(off)=>{ const {row,col}=offsetToLineCol(off); return caretCellRect(row,col); },   // tests: the glyph cell at a caret offset
   convertLegacyMarkup, normalizeStoreDocs, MARKUP_V,
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); },
