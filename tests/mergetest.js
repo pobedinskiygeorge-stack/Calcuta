@@ -219,7 +219,7 @@ const CASES = [
     const el = document.getElementById('input'), ed = document.getElementById('editor');
     el.focus(); const pos = text.indexOf('строка 150') + 3; el.setSelectionRange(pos, pos);
     await new Promise(r => setTimeout(r, 50));
-    const caret = () => { const c = document.querySelector('.caret-block'); return c ? Math.round(c.getBoundingClientRect().top) : null; };
+    const caret = () => { const c = K.caretCell(el.selectionStart); return c ? Math.round(c.top) : null; };
     ed.scrollTop += caret() - ed.getBoundingClientRect().top - 300;
     await new Promise(r => setTimeout(r, 50));
     const before = caret();

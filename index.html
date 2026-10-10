@@ -115,7 +115,6 @@
   --pill-bg:rgba(160,158,150,.22);        /* inline result pill inside the text */
   --pill-col:rgba(160,158,150,.16);       /* results-column pill */
   --pill-col-hover:rgba(160,158,150,.28);
-  --caret-glyph:#1a0e00;   /* the character under the block caret, forced for contrast */
   --scroll-thumb:#313439;
 
   --font-mono:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,'Liberation Mono',monospace;
@@ -184,7 +183,6 @@
   --pill-bg:rgba(140,136,126,.20);
   --pill-col:rgba(140,136,126,.15);
   --pill-col-hover:rgba(140,136,126,.26);
-  --caret-glyph:#fff6ec;
   --scroll-thumb:#cfc9bd;
 }
 
@@ -508,7 +506,7 @@ button{font-family:inherit;color:inherit}
 
 #input{
   position:absolute;top:0;left:0;width:100%;height:100%;z-index:3;resize:none;overflow:hidden;
-  background:transparent;color:transparent;caret-color:transparent;   /* real caret hidden -- #caretlayer draws a custom block instead */
+  background:transparent;color:transparent;caret-color:var(--accent);   /* the browser's own caret, drawn in the invisible textarea text, which lies pixel-for-pixel under #highlight */
   outline:none;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;
   -webkit-touch-callout:none;   /* mobile: no long-press Copy/Look-Up callout over the editor text */
 }
@@ -556,17 +554,9 @@ button{font-family:inherit;color:inherit}
 }
 .cbox-hit:hover{background:var(--row-hover)}
 
-/* custom block caret: solid, non-blinking, terminal-style. It covers the
-   character AFTER the caret offset (not before, like the native thin caret) --
-   .caret-glyph redraws that one character in a forced-contrast color on top,
-   so it stays readable no matter what its underlying syntax color was. */
+/* The caret itself is the browser's native one (see #input). This layer only
+   carries the faint "Type something..." ghost on an empty caret line. */
 #caretlayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:5;pointer-events:none}
-.caret-block{position:absolute;background:var(--accent)}
-.caret-glyph{
-  position:absolute;height:var(--lh);line-height:var(--lh);
-  font-family:var(--font-mono);font-size:var(--fs);letter-spacing:var(--ls);
-  color:var(--caret-glyph);white-space:pre;overflow:hidden;
-}
 .caret-ghost{
   position:absolute;height:var(--lh);line-height:var(--lh);
   font-family:var(--font-mono);font-size:var(--fs);letter-spacing:var(--ls);
@@ -2311,7 +2301,7 @@ function render(){
   // now driven by those events alone (see the 'scroll' and 'resize' listeners).
   if(searchQuery){ computeMatches(); renderSearch(); }
   renderSelection();   // re-place the rounded selection overlay after layout
-  renderCaret();        // re-place the custom block caret + empty-line ghost
+  renderCaret();        // re-place the empty-line ghost
   updateBracketMatch(); // re-check the caret against the freshly rebuilt bracket map
 }
 
@@ -4190,43 +4180,24 @@ function caretCellRect(row, col){
   const er=el.getBoundingClientRect();
   return {left:er.left, top:er.top, width:charW, height:LH, ch:''};
 }
-/* Custom block caret (the native one is invisible, caret-color:transparent)
-   plus the faint "Type something..." ghost on a completely empty line. Both
-   hide together whenever there's an active selection or focus has left the
-   editor — mirrors renderSelection's own visibility rule exactly. */
-/* Belt-and-suspenders against drift: while the editor is focused, a cheap
-   rAF loop re-checks selectionStart/End every frame and repaints only if it
-   actually changed. selectionchange already covers every scenario tested
-   (click, all arrow directions, Home/End, Ctrl+Arrow word-jump, Shift+Arrow,
-   Ctrl+A, programmatic setSelectionRange, touch tap), but WebKit has a known
-   history of lagging selectionchange during an active native selection-handle
-   drag -- this closes that gap for ~0 cost (two integer reads) whenever
-   nothing changed, and stops entirely on blur so it never runs idle. */
-let caretWatchId=null, caretWatchLast='';
-function caretWatchTick(){
-  const key=input.selectionStart+':'+input.selectionEnd;
-  if(key!==caretWatchLast){ caretWatchLast=key; renderCaret(); }
-  caretWatchId=requestAnimationFrame(caretWatchTick);
-}
-function startCaretWatch(){ if(caretWatchId==null){ caretWatchLast=''; caretWatchId=requestAnimationFrame(caretWatchTick); } }
-function stopCaretWatch(){ if(caretWatchId!=null){ cancelAnimationFrame(caretWatchId); caretWatchId=null; } }
+/* The caret is the browser's own: #input's text is invisible but laid out
+   pixel-for-pixel under #highlight, so the native caret lands exactly between
+   the painted glyphs, and only the browser knows which side of a soft wrap a
+   caret at the wrap offset belongs to (End on a wrapped row). This only adds
+   the faint "Type something..." ghost on a completely empty line; it hides
+   whenever there's a selection or focus has left the editor - the same
+   visibility rule as renderSelection. */
 function renderCaret(){
   if(!caretlayer) return;
   const s=input.selectionStart, e=input.selectionEnd;
-  if(document.activeElement!==input || s==null || e==null || s!==e){ caretlayer.innerHTML=''; return; }
+  if(document.activeElement!==input || s==null || e==null || s!==e){ clearLayer(caretlayer); return; }
   const {row,col}=offsetToLineCol(s);
+  if(docLines()[row]!==''){ clearLayer(caretlayer); return; }
   const cell=caretCellRect(row,col);
-  if(!cell){ caretlayer.innerHTML=''; return; }
+  if(!cell){ clearLayer(caretlayer); return; }
   const sb=stack.getBoundingClientRect();
   const top=cell.top-sb.top+stack.scrollTop, left=cell.left-sb.left+stack.scrollLeft;
-  const w=Math.max(cell.width,2);
-  let html='<div class="caret-block" style="top:'+Math.round(top)+'px;left:'+Math.round(left)+'px;width:'+w+'px;height:'+cell.height+'px"></div>';
-  if(cell.ch) html+='<div class="caret-glyph" style="top:'+Math.round(top)+'px;left:'+Math.round(left)+'px;width:'+w+'px">'+esc(cell.ch)+'</div>';
-  const raw=docLines()[row]||'';
-  if(raw===''){
-    html+='<div class="caret-ghost" style="top:'+Math.round(top)+'px;left:'+Math.round(left+w+2)+'px">Type something...</div>';
-  }
-  caretlayer.innerHTML=html;
+  caretlayer.innerHTML='<div class="caret-ghost" style="top:'+Math.round(top)+'px;left:'+Math.round(left+6)+'px">Type something...</div>';
 }
 
 /* Oval pill background behind a variable — shown ONLY while the mouse is
@@ -6058,7 +6029,7 @@ function boot(){
   input.addEventListener('scroll', syncScroll);
 
   document.addEventListener('selectionchange', renderSelection);   // rounded selection overlay
-  document.addEventListener('selectionchange', renderCaret);       // block caret + empty-line ghost
+  document.addEventListener('selectionchange', renderCaret);       // empty-line ghost
   document.addEventListener('selectionchange', updateBracketMatch); // matching-bracket highlight
   document.addEventListener('selectionchange', ()=>renderRails());   // section rail follows the caret
   if(PHONE_MQ.addEventListener) PHONE_MQ.addEventListener('change', ()=>renderRails(true));
@@ -6066,10 +6037,8 @@ function boot(){
   input.addEventListener('focus', ()=>renderRails());
   input.addEventListener('blur', ()=>setTimeout(()=>renderRails(),0));
   input.addEventListener('blur', ()=>{ if(sellayer) sellayer.innerHTML=''; });   // drop the overlay when focus leaves
-  input.addEventListener('blur', ()=>{ if(caretlayer) caretlayer.innerHTML=''; stopCaretWatch(); });
+  input.addEventListener('blur', ()=>{ if(caretlayer) caretlayer.innerHTML=''; });
   input.addEventListener('blur', ()=>{ if(brackethover) brackethover.innerHTML=''; });
-  input.addEventListener('focus', startCaretWatch);
-  if(document.activeElement===input) startCaretWatch();
   stack.addEventListener('mousemove', onStackMove);
   stack.addEventListener('mouseleave', onStackLeave);
   stack.addEventListener('contextmenu', onStackCtx);
@@ -6396,6 +6365,7 @@ window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluate
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
   curCmdAt, lineCurCmd, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
   offsetToLineCol, dateAtIdx,
+  caretCell:(off)=>{ const {row,col}=offsetToLineCol(off); return caretCellRect(row,col); },   // tests: the glyph cell at a caret offset
   convertLegacyMarkup, normalizeStoreDocs, MARKUP_V,
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); },
   // seam for tests/staletest.js: drive the real cloud write paths against a

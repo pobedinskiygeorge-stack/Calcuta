@@ -53,17 +53,24 @@ const DOC = [
       }
     }
 
-    // 2. Caret overlay renders for a sample of caret positions, on every line,
-    //    without throwing and with a plausible position.
+    // 2. The caret is the browser's own; the app must still map EVERY caret
+    //    offset to a painted glyph cell (scroll anchoring and the empty-line
+    //    ghost rely on it) without throwing, and the ghost must appear only on
+    //    an empty line.
     const caretlayer = document.getElementById('caretlayer');
     const seen = new Set();
     for (let pos = 0; pos <= v.length; pos += 1) {
       input.setSelectionRange(pos, pos);
       document.dispatchEvent(new Event('selectionchange'));
-      const box = caretlayer.querySelector('.caret-block');
-      if (!box) { fails.push('no caret box at pos ' + pos); break; }
-      seen.add(box.style.top);
+      const cell = window.__calcuta.caretCell(pos);
+      if (!cell) { fails.push('no glyph cell at pos ' + pos); break; }
+      seen.add(Math.round(cell.top));
+      const row = window.__calcuta.offsetToLineCol(pos).row;
+      const ghost = !!caretlayer.querySelector('.caret-ghost');
+      if (ghost !== (v.split('\n')[row] === '')) { fails.push('ghost ' + (ghost ? 'shown on a non-empty' : 'missing on an empty') + ' line at pos ' + pos); break; }
     }
+    if (caretlayer.querySelector('.caret-block')) fails.push('custom block caret is still drawn');
+    if (getComputedStyle(input).caretColor === 'rgba(0, 0, 0, 0)') fails.push('native caret is transparent');
     const caretRows = seen.size;
 
     const lines = v.split('\n');
