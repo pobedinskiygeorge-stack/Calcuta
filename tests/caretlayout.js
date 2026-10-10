@@ -4,7 +4,8 @@
 // the painted glyphs. This renders both in one color (painted layer only, then
 // textarea text only) and requires the screenshots to be pixel-identical, on a
 // desktop and a phone viewport: headings, indents, tabs, digit grouping, pills,
-// links, checkboxes, wrapped lines, Cyrillic and ₽ € ×.
+// links, checkboxes, wrapped lines, Cyrillic and ₽ € ×. With the hanging
+// indent switched on (WebKit) the same check runs in webkitlayout.js.
 //   node caretlayout.js <path-to-index.html>
 const { chromium } = require('playwright-core');
 const path = require('path');
@@ -65,6 +66,10 @@ const DOC = [
     }, [painted.toString('base64'), native.toString('base64')]);
     ok(d.inkA > 1000, `${name}: the painted text is actually on screen (${d.inkA} px)`);
     ok(d.diff === 0, `${name}: the invisible textarea text lies under the painted text pixel-for-pixel (${d.diff} px differ)`);
+    // hanging indent of wrapped rows: on only where the textarea indents every
+    // line (WebKit / Firefox - see webkitlayout.js); Chrome keeps it off
+    const hang = await page.evaluate(() => window.__calcuta.hang());
+    console.log(`  info ${name}: hanging indent ${hang ? 'on' : 'off (this browser\'s textarea ignores text-indent each-line)'}`);
     const caret = await page.evaluate(() => getComputedStyle(document.getElementById('input')).caretColor);
     ok(caret !== 'rgba(0, 0, 0, 0)' && caret !== 'transparent', `${name}: native caret is visible (${caret})`);
     ok(!errors.length, `${name}: no page errors ${errors.join(' | ')}`);

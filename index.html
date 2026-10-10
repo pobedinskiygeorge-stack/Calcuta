@@ -124,6 +124,7 @@
   --ls:0px;                /* normal spacing, like numbr (the old -0.5px packed glyphs and read darker); kept in the char-width probe too so the caret stays aligned */
   --pad-y:14px;
   --pad-x:16px;
+  --hang:calc(3ch + 3 * var(--ls));   /* hanging indent of wrapped rows = the 3-space section indent (INDENT_UNIT) */
   --results-w:150px;
 }
 
@@ -441,6 +442,19 @@ button{font-family:inherit;color:inherit}
      rule or the caret would drift from the highlighted text. */
   white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;tab-size:4;border:0;
 }
+
+/* Hanging indent: every wrapped row of a line continues at the section-indent
+   column, so text under a "#" heading stays inside its indent instead of
+   wrapping back to the left edge. A line's first row is pulled back by the
+   same amount, so it starts exactly where it did. The painted layer does it per
+   line (.hl-line is one source line), the textarea with `each-line` (indent
+   restarts after every newline). Both or neither: if the textarea ignored it,
+   the layers would wrap differently and the native caret would drift - so
+   html.hang is set only after detectHang() saw a real textarea do it (WebKit /
+   Safari and Firefox do; Chrome, even with each-line support, applies it to a
+   textarea's first line only). */
+html.hang .hl-line{padding-left:var(--hang);text-indent:calc(-1 * var(--hang))}
+html.hang #input{padding-left:calc(var(--pad-x) + var(--hang));text-indent:calc(-1 * var(--hang)) each-line}
 
 /* highlight is the in-flow layer that gives #stack its height */
 #highlight{position:relative;z-index:1;pointer-events:none;color:var(--text);
@@ -4015,10 +4029,11 @@ function renderRails(force){
     if(last>k){
       const top=(lineRowTop[k]+lineRowCount[k])*LH + 14 + 2;              // under the heading row (+ padY)
       const bottom=(lineRowTop[last]+lineRowCount[last])*LH + 14 - 3;
-      // under the "#" (padX + half a glyph) - except on a phone, where most lines
-      // wrap and their wrapped rows restart at column 0, right under the "#":
-      // there the rail moves into the left padding, beside the text, never on it
-      const left=PHONE_MQ.matches ? 6 : Math.round(16 + charW/2);
+      // under the "#" (padX + half a glyph) - except on a phone without the
+      // hanging indent, where most lines wrap and their wrapped rows restart at
+      // column 0, right under the "#": there the rail moves into the left
+      // padding, beside the text, never on it
+      const left=(PHONE_MQ.matches && !HANG) ? 6 : Math.round(16 + charW/2);
       rails+='<div class="sec-rail" data-i="'+k+'" style="top:'+top+'px;height:'+(bottom-top)+'px;left:'+left+'px"></div>';
     }
     k=j-1;
@@ -5861,7 +5876,7 @@ function exportStyleBlock(){
     h2{font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;margin:0 0 14px}
     table{border-collapse:collapse;width:100%}
     td{vertical-align:top;padding:2px 0}
-    td.lcell{white-space:pre-wrap;word-break:break-word;padding-right:18px}
+    td.lcell{white-space:pre-wrap;word-break:break-word;padding-right:18px;padding-left:3ch;text-indent:-3ch}
     td.rcell{text-align:right;white-space:nowrap;color:${c('--result')};font-weight:600;width:1%;padding-left:14px;border-left:1px solid #e6e2d8}
     .num{color:${c('--num')}} .op{color:${c('--op')}} .opx{color:${c('--op-work')};font-weight:600}
     .brk0{color:${c('--brk0')};font-weight:600} .brk1{color:${c('--brk1')};font-weight:600} .brk2{color:${c('--brk2')};font-weight:600}
@@ -5988,7 +6003,31 @@ async function shareLink(){
 /* ================================================================
    [BOOT]
    ================================================================ */
+/* Does this browser's <textarea> indent every line (`text-indent: each-line`),
+   exactly like a <div>? Probe: width 10ch, hanging 3ch. "a" | 12 x's (fit the
+   13ch first row only if the indent applies after the newline) | 24 y's (13 +
+   10 + 1: the soft-wrapped rows must NOT be pulled back). Right = 5 rows, in
+   both elements. Measured once at boot, before anything is laid out. */
+function detectHang(){
+  try{
+    if(!(window.CSS && CSS.supports && CSS.supports('text-indent','1px each-line'))) return false;
+    const css='position:absolute;left:-9999px;top:0;visibility:hidden;margin:0;border:0;box-sizing:content-box;'+
+      'font:10px/10px monospace;letter-spacing:0;white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;'+
+      'width:10ch;padding:0 0 0 3ch;text-indent:-3ch each-line;overflow:hidden;resize:none';
+    const txt='a\n'+'x'.repeat(12)+'\n'+'y'.repeat(24);
+    const ta=document.createElement('textarea'), dv=document.createElement('div');
+    ta.style.cssText=css+';height:1px'; dv.style.cssText=css; ta.value=txt; dv.textContent=txt;
+    document.body.append(ta, dv);
+    const rows=[ta.scrollHeight, dv.offsetHeight].map(h=>Math.round(h/10));
+    ta.remove(); dv.remove();
+    return rows[0]===5 && rows[1]===5;
+  }catch(e){ return false; }
+}
+let HANG=false;
+
 function boot(){
+  HANG=detectHang();
+  document.documentElement.classList.toggle('hang', HANG);
   measureChar();
   computeCharsPerLine();
   load();
@@ -6309,6 +6348,22 @@ function boot(){
     document.fonts.load('400 16px "JetBrains Mono"', '0aЖ₽').then(refit, ()=>{});
     document.fonts.addEventListener('loadingdone', refit);
   }
+  // Row heights are measured per line and reused until that line changes, so
+  // anything that narrows or widens the text column must re-measure them all:
+  // a scrollbar appearing once the text outgrows the screen (classic
+  // scrollbars take width), rotation, the phone keyboard, a resized window.
+  // Window 'resize' misses some of these; watch the column itself.
+  if(window.ResizeObserver){
+    let colW=stack.clientWidth, refitQueued=false;
+    new ResizeObserver(()=>{
+      const w=stack.clientWidth;
+      if(w===colW || refitQueued) return;   // height changes on every render - ignore those
+      colW=w; refitQueued=true;
+      // next frame: re-rendering inside the observer resizes the observed
+      // element again and trips the browser's "ResizeObserver loop" error
+      requestAnimationFrame(()=>{ refitQueued=false; colW=stack.clientWidth; bumpLayout(); computeCharsPerLine(); render(); syncScroll(); });
+    }).observe(stack);
+  }
   // flush pending edits the moment the tab goes to background / closes —
   // debounced timers freeze on mobile and may never fire otherwise
   // On hide/close, fire BOTH the SDK flush (works if the page lingers) and the
@@ -6364,7 +6419,7 @@ window.__calcuta={analyze, fmt, plain, parseNum, regroupText, evaluate, evaluate
   getStore:()=>store, mergeStores, syncPayload, urlRanges, urlLenAt, fullUrl, formatAll,
   stamp, observeTime, observeStore, clockNow:()=>_clock, setClock:(v)=>{ _clock=v; },
   curCmdAt, lineCurCmd, setFx:(r,m)=>{ fxRates=r; fxMeta=m||fxMeta; if(typeof render==='function') render(); },
-  offsetToLineCol, dateAtIdx,
+  offsetToLineCol, dateAtIdx, hang:()=>HANG,
   caretCell:(off)=>{ const {row,col}=offsetToLineCol(off); return caretCellRect(row,col); },   // tests: the glyph cell at a caret offset
   convertLegacyMarkup, normalizeStoreDocs, MARKUP_V,
   createDoc, deleteDoc, addTag, setActive:(id)=>{ store.activeId=id; loadActiveIntoEditor(); },
