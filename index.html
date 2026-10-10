@@ -86,7 +86,6 @@
   /* ---- Soft washes derived from the base hues. ---- */
   --accent-soft:rgba(232,128,44,.16);
   --pill-hover-bg:rgba(94,203,126,.18); /* oval bg behind a variable + usage pills */
-  --super-soft:rgba(185,140,245,.14);   /* whole-row fill of a "#" heading */
   --date-spot:rgba(227,183,85,.16);     /* whole-line tint for "/dd.mm" spotlight */
   --link-soft:rgba(126,200,245,.14);    /* URL pill fill */
   --search-mark:rgba(227,183,85,.30);
@@ -161,7 +160,6 @@
   /* ---- Soft washes. ---- */
   --accent-soft:rgba(193,99,21,.14);
   --pill-hover-bg:rgba(45,164,78,.15);
-  --super-soft:rgba(124,77,214,.12);
   --date-spot:rgba(176,125,16,.14);
   --link-soft:rgba(43,127,196,.12);
   --search-mark:rgba(176,125,16,.28);
@@ -453,10 +451,6 @@ button{font-family:inherit;color:inherit}
    (inset box-shadows) — renders with soft rounded corners, never a hard
    rectangle. Radius clips the inset box-shadows too. */
 .hl-line{min-height:var(--lh);width:100%;border-radius:9px}
-/* "#" supertask heading: the purple fills the WHOLE row, not just the text.
-   Declared before .src so the transient "source line" reference still wins on
-   a heading. Rounding and the same-tint row merging come from .hl-line above. */
-.hl-line.superrow{background:var(--super-soft)}
 .hl-line.src{background:var(--row-src)}
 .hl-line.checked{background:var(--checked-bg)}
 #highlight .num{color:var(--num)}
@@ -1859,10 +1853,8 @@ function buildLineHTML(item, vars, varDefLine, tags, activeTags, activeDates){
 
   // Empty lines keep their height via the fixed .hl-line height; no filler
   // char is added so overlay text stays 1:1 with the textarea.
-  // A "#" heading's purple fill is a ROW background (.hl-line.superrow, set by
-  // render()) rather than an inline wrapper, so it spans the full width instead
-  // of hugging the text. Nothing is added around the glyphs at all, which also
-  // means there is no padding/negative-margin dance to keep the caret aligned.
+  // A "#" heading has no fill: only its letters are purple (.super). The row
+  // still carries a "superrow" class (set by render()) as a hook.
   const html = markerHTML + bodyHTML;
   return {html, cmeta, markerLen, checked:(cls.kind==='checkbox'&&cls.checked),
           superRow:(cls.kind==='super'), spotlightColor, dateSpotlight};
@@ -2173,11 +2165,8 @@ function render(){
     const tints=[];
     if(built.spotlightColor) tints.push('inset 0 0 0 999px '+hexToRgba(built.spotlightColor, TAG_SPOTLIGHT_ALPHA));
     else if(built.dateSpotlight) tints.push('inset 0 0 0 999px var(--date-spot)');
-    // The "#" heading fill is a plain background rather than an inset tint, but
-    // it participates in the same merging: two stacked headings should read as
-    // one purple block, not two pinched pills.
     builtRows[k]=built; tintRows[k]=tints;
-    sigRows[k]=(built.superRow?'super|':'')+tints.join('|');
+    sigRows[k]=tints.join('|');
   }
   // Reconcile the highlight layer: write only the lines whose rendered form
   // changed. `dirty` collects those indices — they're the only ones whose
@@ -4044,8 +4033,8 @@ function renderRails(force){
   // something above it - in the middle of the blank gap between the last
   // content above (text, or the caret's row while typing there) and the
   // heading, or right on the boundary when there is no gap. So it never
-  // crosses text, the caret or a rail. Two headings in a row form one purple
-  // block and get none between them.
+  // crosses text, the caret or a rail. Two headings in a row read as one
+  // title block and get none between them.
   for(let k=1;k<n;k++){
     if(L[k].cls.kind!=='super') continue;
     let r=k-1; while(r>=0 && !L[r].raw.trim() && r!==caretRow) r--;
@@ -5905,7 +5894,6 @@ function exportStyleBlock(){
     .quote{color:${c('--super')}} .super{color:${c('--super')};font-weight:700} .header{color:${c('--comment')}}
     .var{color:${c('--var')};font-weight:500} .sub{color:#1c1a18} .checkmark{color:${c('--result')};font-weight:600} .cbox{color:${c('--cbox')};font-weight:600}
     .varu{background:${c('--pill-hover-bg')};border-radius:5px;padding:0 2px}
-    td.lcell.superrow{background:${c('--super-soft')};border-radius:5px}
     td.lcell.checked{background:${c('--checked-bg')};color:${c('--checked-text')};border-radius:5px}
     .doclink{color:${c('--link')};text-decoration:underline}
     .rpill{background:${c('--pill-bg')};border-radius:5px;padding:0 3px}
